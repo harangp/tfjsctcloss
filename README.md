@@ -25,7 +25,7 @@ import { ctcLossGradient } from './ctc';
 // build your model
 const model = tf.sequential();
 model.add(tf.layers.inputLayer({ name: 'inputLayer', inputShape: [5, 42] }));
-// add your model's wizardy here - for the sake of simplicity, this is just a simple dense layer
+// add your model's wizardry here - for the sake of simplicity, this is just a simple dense layer
 model.add(tf.layers.dense({ 
   name: 'denseLayer', 
   units: 42, 
@@ -40,9 +40,23 @@ model.compile({
 });
 model.summary();
 ```
-Then you can use model.fit() as you usually would, with all the batches and epochs, etc.
+Then you can use `model.fit()` as you usually would, with all the batches and epochs, etc.
 
-## My learning process
+### Inputs, labels and special restrictions
+
+- This implementation operates on a 3D tensor: `[batch][timestep][one-hot encoded embeddings]`.
+- The inputs of the loss calculation are probabilities, prepare a model that each timestep's emberddings values' are between 0 and 1 and sum up to 1.
+- For the learning process (fit) the labels should be one-hot encoded. Shape must be the same as for the inputs.
+- The last one-hot embedding is used as the delimiter
+- If the label is too short and does not fill the sample, just padd it with the delimiter
+
+### Known issues
+
+- Results needed to be validated - I didn't have proper test cases up until now. This is the current focus.
+- Thee's no input validation - yet.
+- No `tidy()` anywhere - yet.
+
+## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
 
 - learn about the CTC algorythm, and it's usage
@@ -65,7 +79,7 @@ There are some articles one should read about the usage of the CTC algorythm. Th
 
 The papers describing the algorythm are here:
 
-- https://www.cs.toronto.edu/~graves/icml_2006.pdf - Graves et. all: Connectionist Temporal Classification: Labelling Unsegmented Sequence Data with Recurrent Neural Networks
+- https://www.cs.toronto.edu/~graves/icml_2006.pdf - Graves et al.: Connectionist Temporal Classification: Labelling Unsegmented Sequence Data with Recurrent Neural Networks
 - http://bacchiani.net/resume/papers/ASRU2017.pdf - Improving the efficiency of forward-backward algorithm using batched computation in Tensorflow
 
 Lectures:
@@ -77,12 +91,12 @@ Lectures:
 
 ### Existing solutions
 
-The only thing comes close to the native JS implementation is @martiancba's solution that was commented in this issue: https://github.com/tensorflow/tfjs/issues/1759
+The only thing comes close to the native JS implementation is **@martiancba**'s solution that was commented in this issue: https://github.com/tensorflow/tfjs/issues/1759
 However, I couldn't wrap my head around some of the implementation's pecularities (namely, calculation of beta variables and input matching). However, it's usage of the tf operators is very advanced, worth checking out.
 
-The Tensorflow Python implementation is definitely worth checking out: [ctc_ops.py](https://github.com/tensorflow/tensorflow/blob/87462bfac761435a46641ff2f10ad0b6e5414a4b/tensorflow/python/ops/ctc_ops.py)
+The Tensorflow **Python implementation** is definitely worth checking out: [ctc_ops.py](https://github.com/tensorflow/tensorflow/blob/87462bfac761435a46641ff2f10ad0b6e5414a4b/tensorflow/python/ops/ctc_ops.py)
 
-My personal favourite is the Stanford CTC implementation, since it is understandable for folks who are not well versed in Python: https://github.com/amaas/stanford-ctc/blob/master/ctc/ctc_fast.pyx
+My personal favourite is the **Stanford CTC implementation**, since it is understandable for folks who are not well versed in Python: https://github.com/amaas/stanford-ctc/blob/master/ctc/ctc_fast.pyx
 The code is very easy to read, and you can relate much of it to the original paper.
 
 ### Tensorflow architecture
@@ -126,6 +140,10 @@ The execution depending on what's available for Tensorflow can be really differe
 - **tfjs-webgl** - kernel functions take advantage of the parallel processing capabilities of your GPU
 
 Every step brings at least a two-fold drop in execution time, so it is essential to have as many things as possible "tenosry". But it's not trivial - some of the operators are (albeit very useful) pretty hard to grasp. That's where the learning process and the cycle kicks in.
+
+## Contribution, discussion, etc
+
+Currently, this project is for my own amusement. However, if you find it worthy for your attention, reach out to me here, or at the [Tensorflow Forum](https://discuss.tensorflow.org/t/ctc-loss-implementation-in-tfjs/6645)
 
 ## License
 
