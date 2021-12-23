@@ -1,18 +1,18 @@
 import * as tf from '@tensorflow/tfjs-node';
-import { EMBEDDINGS } from './utilities';
 import { ctcLossGradient } from './ctc';
+
+const EMBEDDINGS = "aábcčdeéfgďhiíjklmnñoóöőpqrsštťuúüűvwxyzž";
 
 // const labelDut = ['cat', 'cat', 'cat', 'cat'];
 // const labels = labelDut.map( x => Array.from(x).map( c => EMBEDDINGS.indexOf(c)));
-// ez a kódolt igazság. A példában azért van íg, mert a hangok között az ékezetes ABC szerepet. a "cat" szót kódolja, angol hangzással.
+// this is the coded truth. the example uses these long embeddings, because the utterances include accented characters. This encodes thw word  "cat".
 // const oneHotLabel = [
 //     [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 //     [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 //     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 // ];
 
-// ez az első próbának a match-e - ez jön be a label-ből. ki kell egészíteni, mert a példában (3 hang) 5 time-slot van, amit mindenképpen ki kell tölteni
-// úgyhogy első próbálkozáson konkrétan paddelünk.
+// this is the first try to match - this one comes from the label. it needs to be padded as mentioned in the readme, because we have 5 timeslots here
 const groundTruth = [
     [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
