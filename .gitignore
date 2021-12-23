@@ -1,0 +1,14 @@
+# NPM node modules
+package-lock.json
+
+# Compiled binary addons (http://nodejs.org/api/addons.html)
+build/
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
