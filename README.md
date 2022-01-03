@@ -13,7 +13,7 @@ The whole repository is just two files:
 - **ctc.ts** contains the loss calculator, the gradient custom operation, and a helper function for decoding the results.
 - **ctc.spec.ts** contains the test, and also some examples how to include it in the models.
 
-Otherwise, I will just document here my findings related to the implementation.
+Otherwise, I will just document here my findings related to the implementation. I suggest checking out the PDF / Excel file which contains a careful calculation for a simple use-case, so you can follow what happens in each step, what is added up, what is multiplied, etc.
 
 ## Status
 
@@ -26,12 +26,14 @@ Fist version is made public. Basic calculation is validated, works well on singl
 
 ### Known issues
 
+- Batch calculations only work if `l'` has the same length for every batch element. There's a paper for dealing with this.
 - Thee's no input validation - input and label mismatches will result in runtime error
 - No `tidy()` anywhere - larger fit() runs migth get out of memory errors.
 
 ### TODO
 
 - Make it more tensory and depend less on JS native array operations
+- Incorporate the solution to work on batches with different l' elements
 
 ## Usage
 
@@ -154,6 +156,56 @@ The execution depending on what's available for Tensorflow can be really differe
 - **tfjs-webgl** - kernel functions take advantage of the parallel processing capabilities of your GPU
 
 Every step brings at least a two-fold drop in execution time, so it is essential to have as many things as possible "tenosry". But it's not trivial - some of the operators are (albeit very useful) pretty hard to grasp. That's where the learning process and the cycle kicks in.
+
+## CTC algorithm implementation specialities
+
+In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tesor concept. If you want to learn more about the algorithm, check the previous chapter for the links.
+
+### Gradient calculation with batches
+
+Nearly all the implementations I've seen handles the `y'` array (matrix, tensor, whichever you want to call it) in a special way: storing the selected embeddings and the separator embedding in different data-structures and choosing where to get from variables on-the-fly. I've choosen a different approach, trading memory for performance: the assembled `y'` array contains the selected predictions with the embeddings as well. This approach enables us to use the tensor functions effectively in the gradient calculation. 
+
+The original paper's equation (16) looks like this:
+
+![\frac{\partial O^{ML}(\left\{(x, z) \right\}, N__{w})}{\partial u_{k}^{t}}= y_{k}^{t}-\frac{1}{y_{k}^{t}Z__{t}}\sum_{s\in lab(z, k)}\hat{\alpha _{t}}(s) \hat{\beta _{t}}(s)](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D%20%5Cbg_white%20%5Cfrac%7B%5Cpartial%20O%5E%7BML%7D(%5Cleft%5C%7B(x,%20z)%20%5Cright%5C%7D,%20N__%7Bw%7D)%7D%7B%5Cpartial%20u_%7Bk%7D%5E%7Bt%7D%7D=%20y_%7Bk%7D%5E%7Bt%7D-%5Cfrac%7B1%7D%7By_%7Bk%7D%5E%7Bt%7DZ__%7Bt%7D%7D%5Csum_%7Bs%5Cin%20lab(z,%20k)%7D%5Chat%7B%5Calpha%20_%7Bt%7D%7D(s)%20%5Chat%7B%5Cbeta%20_%7Bt%7D%7D(s))  
+where  
+![Z__{t}\overset{\underset{\mathrm{def}}{}}{=}\sum_{s=1}^{\left| l' \right|} \frac{\hat{\alpha _{t}}(s) \hat{\beta _{t}}(s)} {y_{l_{s}^{'}}^{t}}](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D%20%5Cbg_white%20Z__%7Bt%7D%5Coverset%7B%5Cunderset%7B%5Cmathrm%7Bdef%7D%7D%7B%7D%7D%7B=%7D%5Csum_%7Bs=1%7D%5E%7B%5Cleft%7C%20l'%20%5Cright%7C%7D%20%5Cfrac%7B%5Chat%7B%5Calpha%20_%7Bt%7D%7D(s)%20%5Chat%7B%5Cbeta%20_%7Bt%7D%7D(s)%7D%20%7By_%7Bl_%7Bs%7D%5E%7B'%7D%7D%5E%7Bt%7D%7D)  
+and  
+![](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D%20%5Cbg_white%20lab(l,%20k)=%5Cleft%5C%7B%20s:%20l_%7Bs%7D%5E%7B'%7D=k%5Cright%5C%7D)
+
+This looks frightening. Let's rephrase to make it a little more programmer friendly.
+
+`alpha` and `beta` are the tensors we've calculated beforehand (these are the normalized forward and backward variables), and `y(l'(s))` is the tensor we've prepared from the original predictions. Let's put aside the `sum s in lab(z,k)` part for now, and concentrate on `Z(t)`.
+
+Note, that `alpha`, `beta` and `y` tensors have the same shape, since they originate from the same data with the shape of `[batch, timestep, |l'|]` So, calculating each element after sum sign is a simple multiplication and division in TensorFlow (these functions work element-wise). Of course, we need to check not to divide by zero, but there's an inbuilt function `divNoNan` too. We are good to go.
+
+Also, summing up by the timestep dimension is pretty easy, calling `sum()` and definig the axis.
+
+```js
+const Zt = a.mul(b).divNoNan(y).sum(2, true);
+```
+
+The `true` flag at the end of the `sum()` function call notes we don't want to collapse one dimension - this will come in handy in the further calculations. Also, there's a `cumsum()` function which does exactly the same, but during the test, `sum()` was faster.
+
+Now that we have `Z(t)` in hand, we can calculate the first equation.
+
+As you've probably guessed, the `alpha * beta` within the sum is the same thing we did when calculating `Z(t)`. the `sum lab` part is a fancy way of telling "sum up the same elements for the corresponding embedding and timestep". There are two things we can do to remain tensory as long as we can:
+- since `Z(t)` is a constant for every timestep, we can move the calculation into the inner part of the sum, which means we divide every element with the corresponding `Z(t)`.
+- y(k, t) behaves as a constant for the sum, it can be moved into the inner part of the sum too
+- we can observe, that the `y(k, t)` (which is the original prediction) in our case equals to `y'(k, t)` (which is the rearranged `y` matrix according to `l'`) and this holds true in every embedding location. The good part is that `y'` is perfectly arranged for the division we are about to do.
+
+The only drawback here is that the separator embedding will be divided `int(|l'|/2)` times more than just once. Also, if you have multiple instances of the same embedding the same thing applies - ex.: in the word 'alamo', `l'` is '\_a_l_a_m_o\_' and the timestep values referring to the embeddings 'a', and '\_' will to be divided more than once. This is the price for not having to rearrange structures in memory.
+
+> I consider executing the same divisions for keep everything in the Tensorflow pipeline a small price to pay. Using webGL in the browser, or using the pipelining and vectorization features of modern processors should even bring performance enhancements. But this needs to be tested.
+
+With this approach, we gain another optimalization: reusing the result of `a.mul(b).div(y)` we did for calculating `Z(t)` comes handy. So our final heavy lifting (calculating the inner part of the sum of the first equation) takes the following form:
+
+```js
+const abDivY = a.mul(b).divNoNan(y);
+const Zt = abDivY.sum(2, true); // setting it to true kepps the Zt tensor 3D instead of just 2D
+const innerSum = abDivY.divNoNan(Zt); // 3D tensor can be diviced by a 3D tensor
+```
+Now we can move on to sum up the unique embeddings of `l'` into our gradient tensor - but that's a TODO for now.
 
 ## Contribution, discussion, etc
 

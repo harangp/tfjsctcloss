@@ -1,5 +1,7 @@
 /**
- * CTC (Connectionist Temporal Classification) Operations.
+ * CTC (Connectionist Temporal Classification) Operations
+ * 
+ * by Peter Harang
  * 
  * based on the original paper, and the Tensorflow Python implementation.
  * 
@@ -17,6 +19,7 @@
  * 
  * https://www.youtube.com/watch?v=c86gfVGcvh4
  * 
+ * License: Creative Commons BY-NC 4.0
  */
 import { Tensor, op, customGrad, GradSaveFunc, neg } from '@tensorflow/tfjs';
 import * as tf from '@tensorflow/tfjs';
