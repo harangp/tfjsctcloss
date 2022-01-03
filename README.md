@@ -12,7 +12,26 @@ The goal of this project is to finalize a CTC loss calculator to enable pure Ten
 The whole repository is just two files:
 - **ctc.ts** contains the loss calculator, the gradient custom operation, and a helper function for decoding the results.
 - **ctc.spec.ts** contains the test, and also some examples how to include it in the models.
+
 Otherwise, I will just document here my findings related to the implementation.
+
+## Status
+
+Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice.
+
+### Currently woking on
+
+- Documentation
+- Unit tests - current tests are not comparing expected results.
+
+### Known issues
+
+- Thee's no input validation - input and label mismatches will result in runtime error
+- No `tidy()` anywhere - larger fit() runs migth get out of memory errors.
+
+### TODO
+
+- Make it more tensory and depend less on JS native array operations
 
 ## Usage
 
@@ -50,16 +69,10 @@ Then you can use `model.fit()` as you usually would, with all the batches and ep
 - The last one-hot embedding is used as the delimiter
 - If the label is too short and does not fill the sample, just padd it with the delimiter
 
-### Known issues
-
-- Results needed to be validated - I didn't have proper test cases up until now. This is the current focus.
-- Thee's no input validation - yet.
-- No `tidy()` anywhere - yet.
-
 ## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
 
-- learn about the CTC algorythm, and it's usage
+- learn about the CTC algorithm, and it's usage
 - examine the existing solutions
 - lear about Tensorflow.JS' architecture
 - develop a naive implementation - doesn't have to be nice, but it should work
@@ -71,13 +84,13 @@ Let's dive in!
 
 ### Learn about the problem itself
 
-There are some articles one should read about the usage of the CTC algorythm. They are a good starting point to understand why we need it:
+There are some articles one should read about the usage of the CTC algorithm. They are a good starting point to understand why we need it:
 
 - https://towardsdatascience.com/build-a-handwritten-text-recognition-system-using-tensorflow-2326a3487cd5
 - https://distill.pub/2017/ctc/
 - https://towardsdatascience.com/intuitively-understanding-connectionist-temporal-classification-3797e43a86c
 
-The papers describing the algorythm are here:
+The papers describing the algorithm are here:
 
 - https://www.cs.toronto.edu/~graves/icml_2006.pdf - Graves et al.: Connectionist Temporal Classification: Labelling Unsegmented Sequence Data with Recurrent Neural Networks
 - http://bacchiani.net/resume/papers/ASRU2017.pdf - Improving the efficiency of forward-backward algorithm using batched computation in Tensorflow
@@ -115,7 +128,7 @@ Throughout the implementation you should have two goals:
 
 From my first experience, this won't happen in your first try. Tensors are immutable, accessing values are a pain, and you sometimes just throw in the towel and do things the old fasioned way: get an array representation, do the trick as you are used to, then convert the result back into a tensor and move along. **This is fine for getting things working**, just don't forget, that there is a reason for pressing work to be done the 'Tensorflow way'. More on that later.
 
-CTC is a dynamic algorythm, which means a lot of slicing / concatenation / conditional stuff is happening. It will take time to get there.
+CTC is a dynamic algorithm, which means a lot of slicing / concatenation / conditional stuff is happening. It will take time to get there.
 
 ### Test
 
@@ -136,6 +149,7 @@ const result = tensorA.mul(tensorB);
 If you would need to do it in a pure JavaScript way, with arrays, you would implement the cycles, do the math, and return a new array with the results.
 The execution depending on what's available for Tensorflow can be really different:
 - **tfjs only** - just like you would do it in pure javascript, but somebody has programmed it for you. Sweet.
+- **tfjs-wasm** - the core is implemented in WebAssembly, so there's a significant improvement on performance. Not all functions are supported though.
 - **tfjs-node** - kernel functions run natively on the processor, so you have the full power of your CPU, including the special instruction-sets you might have
 - **tfjs-webgl** - kernel functions take advantage of the parallel processing capabilities of your GPU
 
