@@ -73,7 +73,7 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
 
     const customOp = customGrad((labels: Tensor, predictions: Tensor, save: GradSaveFunc) => {
 
-        // TODO: input checks: labels tensor's shape should be equal to predictions tensor's shape. tensora' rank should be 3 (onehot), or 2(not onehot)
+        // TODO: input checks: labels tensor's shape should be equal to predictions tensor's shape. tensora' rank should be 3 (onehot)
         const sequenceLength = labels.shape[1];
 
         // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
@@ -93,8 +93,11 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         const fwd = forward(batchExtendedLabels, y, sequenceLength);
         const a = fwd.batchAlpha;
         const loss = <O>tf.tensor(fwd.batchLoss);
-        
+
         const b = backward(batchExtendedLabels, y, sequenceLength);
+        
+        // console.log(new Date(), '^alpha', a);
+        // console.log(new Date(), "^beta", b);
 
         // ok, we shouldn't really do this, since Javascript retains the context. whatever.
         save([tf.tensor(y), tf.tensor(a), tf.tensor(b), tf.tensor(batchExtendedLabels)]);
@@ -103,19 +106,22 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         const gradFunc = (dy: O, saved: Tensor[]) => {
             const [yParam, aParam, bParam, bels] = saved;
 
-            // we need to calculate the gradient - we'll use equation nr. 16 in the original paper to do so.
+            // we need to calculate the gradient - we'll use equation nr. 16 in the original paper to do so, but there's a slight modification. check redme.
             const ab = aParam.mul(bParam);
-            
+
             const yParamTransposed =  yParam.transpose([0, 2, 1]);
-            const abDivY = ab.divNoNan(yParamTransposed);
-            const abSum = ab.sum(2, true); // this is faster than tf.cumsum()
-            const abSumMulY = yParamTransposed.mul(abSum)
-            const grad = neg(abDivY.divNoNan(abSumMulY)).transpose([0, 2, 1]); //shape after transpose: [batch][character][time]
+            const abDivY = ab.divNoNan(yParamTransposed); // for calculating Z(t)
+
+            const Zt = abDivY.sum(2, true); // this is faster than tf.cumsum()
+
+            // this will be eq 16's second part. the divident is moved inside of the sum, because it's faster to calculate - we are tensory
+            const grad = neg(abDivY.divNoNan(Zt)).transpose([0, 2, 1]); //shape after transpose: [batch][character][time]
 
             const retY = <number[][][]>tf.fill(labels.shape, 0).arraySync();
             const retG = <number[][][]>tf.fill(labels.shape, 0).arraySync();
             // note: this is faster than: tf.buffer(labels.shape).toTensor().arraySync(), and more faster than building a zero-filled array by hand
 
+            // let's just pick-and-sum the relevant character's values from 'grad' according to the 'sum' part of eq 16
             const yArray = <number[][]>yParam.arraySync();
             const gradArray = <number[][]>grad.arraySync();
             const belsArray = <number[][]>bels.arraySync();
@@ -161,6 +167,7 @@ export const ctcLossGradient = op({ctcLossGradient_});
  * Preparing everyhting for a successful  CTC loss calculation. This will return both the one-hot character ids and the y matrix.
  * 
  * TODO: filtered batchlabels contain all the characters we need in the bels list and the y matrix. so instead of scanning through, we just need to prepare the bels variable from batch labels
+ * TODO: tf.gather() can be used for this, and we can stay tensory as follows:
  * 
  * labels should be gathered in [separator label1 separator label2 ...] fashion to form batchExtendedLabels
  * then yBatchMatrix should be gathered according to batchExtendedLabels

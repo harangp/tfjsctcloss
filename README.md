@@ -91,7 +91,7 @@ Lectures:
 
 ### Existing solutions
 
-The only thing comes close to the native JS implementation is **@martiancba**'s solution that was commented in this issue: https://github.com/tensorflow/tfjs/issues/1759
+The only thing comes close to the native JS implementation is **@marsiancba**'s solution that was commented in this issue: https://github.com/tensorflow/tfjs/issues/1759
 However, I couldn't wrap my head around some of the implementation's pecularities (namely, calculation of beta variables and input matching). However, it's usage of the tf operators is very advanced, worth checking out.
 
 The Tensorflow **Python implementation** is definitely worth checking out: [ctc_ops.py](https://github.com/tensorflow/tensorflow/blob/87462bfac761435a46641ff2f10ad0b6e5414a4b/tensorflow/python/ops/ctc_ops.py)
