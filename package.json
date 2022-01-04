@@ -1,6 +1,6 @@
 {
   "name": "tfjsctcloss",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CTC loss and gradient implementation for Tensorflow.JS",
   "keywords": [
     "tensorflow",
