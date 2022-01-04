@@ -64,31 +64,34 @@ const oneLabel = tf.tensor([
 
 // example from Mr. Logan's lectures
 const loganInput = tf.tensor([0.2, 0.1, 0.1, 0.6, 0, 0.7, 0.2, 0.1, 0.2, 0, 0, 0.8, 0.6, 0.1, 0.1, 0.2], [1, 4, 4]);
-console.log('loganInput')
-loganInput.print();
 
-console.log('loganLabels, modelling "CA__" - check the excel tables for refernce')
+// loganLabels, modelling "CA__" - check the excel tables for refernce'
 const loganLabels = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1], [1, 4, 4]);
-loganLabels.print()
+
+// variable length labels, modelling "CA__, CAT_" for variable length'
+const variInputs = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], [2, 4, 4]);
+const variLabels = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], [2, 4, 4]);
+
 
 // we have a gradient fucntion.
 const gFunc = tf.grads( (x, y) => ctcLossGradient(x, y));
+console.log(new Date(), "gradient function is constructed");
 
 /** ------------------- unit test ----------------------
  * oneLabel and oneSample is the same. the expected result is a zero gradient in two parts
  */
- console.log(new Date(), 'trying to calculate simple gradients outside of fit(): oneLabel/oneSample');
- const ret1 = gFunc([oneLabel, oneSample]);
- console.log(new Date(), 'finished calculation');
- ret1.forEach(x => x.print());
+console.log(new Date(), 'trying to calculate simple gradients outside of fit(): oneLabel/oneSample');
+const ret1 = gFunc([oneLabel, oneSample]);
+console.log(new Date(), 'finished calculation');
+ret1.forEach(x => x.print());
 
 /** ------------------- unit test ----------------------
  * batchPrediction / batchLabel invoked stuff must run without errors.
  */
- console.log(new Date(), 'trying to calculate gradients outside of fit() on batchPrediction/batchLabel with element number:', batchPrediction.shape[0]);
- const ret2 = gFunc([batchLabels, batchPrediction]);
- console.log(new Date(), 'finished calculation');
- ret2.forEach(x => x.print());
+console.log(new Date(), 'trying to calculate gradients outside of fit() on batchPrediction/batchLabel with element number:', batchPrediction.shape[0]);
+const ret2 = gFunc([batchLabels, batchPrediction]);
+console.log(new Date(), 'finished calculation');
+ret2.forEach(x => x.print());
 
 /** ------------------- unit test ----------------------
  * Let's test loss with Logan's inputs, since it is precalculated in the excel
@@ -106,7 +109,16 @@ console.log(new Date(), 'trying to calculate GRADIENTS outside of fit() on Mr. L
 const ret4 = gFunc([loganLabels, loganInput]);
 console.log(new Date(), 'finished calculation');
 ret4.forEach(x => x.print());
- 
+
+ /** ------------------- unit test ----------------------
+ * Let's test the gradient with variable length sentences. Actual results are not interesting (should be zero btw), we are checking wether length variation
+ * is handled correctly in the algorithm.
+ */
+console.log(new Date(), 'trying to calculate GRADIENTS outside of fit() on variable length example with element number:', variLabels.shape[0]);
+const ret5 = gFunc([variLabels, variInputs]);
+console.log(new Date(), 'finished calculation');
+ret5.forEach(x => x.print());
+
 /** ------------------- unit test ----------------------
  * CTC loss / gradient working inside of fit() - this is a standard model we'll use
  */
@@ -119,7 +131,7 @@ model.compile({
     optimizer: tf.train.adam(),
     metrics: ['accuracy']
 });
-model.summary();
+// model.summary();
 
 async function modelTest() {
 
@@ -144,4 +156,4 @@ async function modelTest() {
     console.log(new Date(), res2.history.loss[0]);
 }
 
-modelTest().then( () => { console.log(new Date(), "done"); });
+// modelTest().then( () => { console.log(new Date(), "done"); });

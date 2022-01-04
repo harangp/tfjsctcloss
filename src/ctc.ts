@@ -78,9 +78,10 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
 
         // TODO: input checks: labels tensor's shape should be equal to predictions tensor's shape. tensora' rank should be 3 (onehot)
         const sequenceLength = labels.shape[1];
+        const embeddingLength = labels.shape[2];
 
         // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
-        const delimiterIndex = labels.shape[2] - 1;
+        const delimiterIndex = embeddingLength - 1;
 
         // onehots are decoded, then filtered not to include the delimiter, since it can confuse the algorithm
         const batchLabels = decodeOneHot(labels).map(e => e.filter((v) => v != delimiterIndex));
@@ -99,11 +100,16 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
 
         const b = backward(batchExtendedLabels, y, sequenceLength);
         
-        // console.log(new Date(), '^alpha', a);
-        // console.log(new Date(), "^beta", b);
+        // we shouldn't really do this, since Javascript retains the context. But, it forces us to make everything tenosry, so it's not a problem
+        // we need padding to handle variable length senteces. maximum recognisable length is equal to sequenceLength, so the padding length should be 2*seqLen+1
+        const padTo = sequenceLength*2+1;
 
-        // ok, we shouldn't really do this, since Javascript retains the context. whatever.
-        save([tf.tensor(y), tf.tensor(a), tf.tensor(b), tf.tensor(batchExtendedLabels)]);
+        const paddedY = padY(y, padTo, 0);
+        const paddedA = padFwdBwd(a, padTo, 0); 
+        const paddedB = padFwdBwd(b, padTo, 0); 
+        const paddedL = padLabels(batchExtendedLabels, padTo, -1);
+        
+        save([paddedY, paddedA, paddedB, paddedL]);
 
         // dy is to multiply the gradient. check `Engine.prototype.gradients` in tf-core.node.js, we don't use it here
         const gradFunc = (dy: O, saved: Tensor[]) => {
@@ -129,21 +135,22 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
             const gradArray = <number[][]>grad.arraySync();
             const belsArray = <number[][]>bels.arraySync();
 
-            belsArray.forEach( (batch, b) => {
+            belsArray.forEach( (batchItem, b) => {
                 const foundChar: number[] = [];
-                batch.forEach( (character, c) => {
-                    // updating the gradient vector. every instance should be added up
-                    for(let t = 0; t < sequenceLength; t++) {
-                        retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
-                    }
-                    
-                    // every character only needed to be included once from the yParam matrix.
-                    // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
-                    if (!foundChar.includes(character)) {
+                batchItem.forEach( (character, c) => {
+                    if (character != -1) { // -1 denotes it is a padder character not to be handled
+                        // updating the gradient vector. every instance should be added up
                         for(let t = 0; t < sequenceLength; t++) {
-                            retY[b][t][character] = retY[b][t][character] + yArray[b][c][t];
+                            retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
                         }
-                        foundChar.push(character);
+                        // every character only needed to be included once from the yParam matrix.
+                        // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
+                        if (!foundChar.includes(character)) {
+                            for(let t = 0; t < sequenceLength; t++) {
+                                retY[b][t][character] = retY[b][t][character] + yArray[b][c][t];
+                            }
+                            foundChar.push(character);
+                        }
                     }
                 });
             });
@@ -206,6 +213,62 @@ function prepare(batchLabels: number[][], batchInputs: number[][][], delimiterIn
     });
 
     return { batchExtendedLabels, yBatchMatrix }
+}
+
+/**
+ * Pads a 3D array's second dimension  (length - |embedding|) times. It is needed to be able to convert variable length arrays to tensors
+ * Since the given length is usually the number of timesteps, the result will be a square for all of the batch elements
+ * 
+ * @param batchInput [batch][timestep][l' embeddings]
+ * @param padTo length to pad to (usually the seqLen*2+1)
+ * @param padValue 
+ * @returns 3D tensor which has the shape of [batch][length][timestep]
+ */
+function padFwdBwd(batchInput: number[][][], padTo: number, padValue = 0): Tensor {
+    const ret = batchInput.map( x => {
+        return x.map( y => {
+            const padder = padTo - y.length;
+            return padder > 0 ? y.concat(new Array(padder).fill(padValue)) : y;
+        });
+    });
+    return tf.tensor3d(ret);
+}
+
+/**
+ * Pads the Y matrix, which has a different shape than the alpha/beta matrix
+ * 
+ * @param batchInput 
+ * @param embeddingLen 
+ * @param padTo 
+ * @param padValue 
+ * @returns 
+ */
+function padY(batchInput: number[][][], padTo: number, padValue = 0): Tensor {
+    batchInput.forEach( x => {
+        const padder = padTo - x.length;
+        const seqLen = x[0].length;
+        for(let i = 0; i < padder; i++) {
+            x.push( new Array(seqLen).fill(padValue));
+        }
+    });
+    return tf.tensor3d(batchInput);
+}
+
+
+/**
+ * Pads the 2D array that holds the (usually extended) labels
+ * 
+ * @param bExtendedLabels the labels we need to pad
+ * @param padTo sequence length to pad to
+ * @param padValue default is -1 indicating that the value should not taken into account
+ * @returns 2D tensor with the shape of [batch][seqLength]
+ */
+function padLabels(bExtendedLabels: number[][], padTo: number, padValue = -1): Tensor {
+    const ret = bExtendedLabels.map( x => {
+        const padder = padTo - x.length;
+        return padder > 0 ? x.concat(new Array(padder).fill(padValue)) : x;
+    });
+    return tf.tensor2d(ret);
 }
 
 /**

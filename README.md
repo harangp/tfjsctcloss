@@ -17,23 +17,24 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ## Status
 
-Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice.
+### Changelog
+
+- **0.0.2** - Handles variable length labels in large batches.
+- **0.0.1** - Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice. 
 
 ### Currently woking on
 
-- Documentation
-- Unit tests - current tests are not comparing expected results.
+- Making the preparation and the gradient assembly functions more tensory
 
 ### Known issues
 
-- Batch calculations only work if `l'` has the same length for every batch element. There's a paper for dealing with this.
 - Thee's no input validation - input and label mismatches will result in runtime error
 - No `tidy()` anywhere - larger fit() runs migth get out of memory errors.
 
 ### TODO
 
+- Unit tests - current tests are not comparing expected results.
 - Make it more tensory and depend less on JS native array operations
-- Incorporate the solution to work on batches with different l' elements
 
 ## Usage
 
@@ -65,11 +66,12 @@ Then you can use `model.fit()` as you usually would, with all the batches and ep
 
 ### Inputs, labels and special restrictions
 
-- This implementation operates on a 3D tensor: `[batch][timestep][one-hot encoded embeddings]`.
+- This implementation operates on a 3D tensor: `[batch][(time)step][one-hot encoded embeddings]`.
 - The inputs of the loss calculation are probabilities, prepare a model that each timestep's emberddings values' are between 0 and 1 and sum up to 1.
 - For the learning process (fit) the labels should be one-hot encoded. Shape must be the same as for the inputs.
-- The last one-hot embedding is used as the delimiter
-- If the label is too short and does not fill the sample, just padd it with the delimiter
+- The **last one-hot embedding** is used as the delimiter - this is different than the current TF Python implementation
+- If the label is too short and does not fill the all the sequence, just padd it with the delimiter. All the delimiters are filtered when processing the labels, and are rebuilt from the ground.
+- If you want detect empty space between characters, or silence while processing sound, add an embedding for that too, don't use the delimiter for that.
 
 ## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
@@ -95,6 +97,7 @@ There are some articles one should read about the usage of the CTC algorithm. Th
 The papers describing the algorithm are here:
 
 - https://www.cs.toronto.edu/~graves/icml_2006.pdf - Graves et al.: Connectionist Temporal Classification: Labelling Unsegmented Sequence Data with Recurrent Neural Networks
+- https://www.isca-speech.org/archive_v0/Interspeech_2017/pdfs/1557.PDF - An Efficient Phone N-gram Forward-backward Computation Using Dense Matrix Multiplication
 - http://bacchiani.net/resume/papers/ASRU2017.pdf - Improving the efficiency of forward-backward algorithm using batched computation in Tensorflow
 
 Lectures:
@@ -138,9 +141,12 @@ CTC is a tricky alrgorythm, it has it's perks. The main problem is, that it requ
 - matching inputs and labels should return a zero loss and zero gradiens
 - random noise inputs should produce "something" other than error
 - should handle signle elements and batched elements
+- should run correctly with different length labels
 - running fit() with 10 epochs we should see a decreasing loss
 
 There is a big **TODO** here: have somebody who has some experience with the Python implementation, and generate some input-output pairs for our tests. Until then, let's extract some of the tests from here: [ctc_loss_op_test.py](https://github.com/tensorflow/tensorflow/blob/ab7c873202574b3cd549a93ccbfd881d659186ca/tensorflow/python/kernel_tests/nn_ops/ctc_loss_op_test.py)
+
+Also, it is inevitable to calculate some results by hand. Check the excel for that.
 
 ### Refactor cycle
 
@@ -161,7 +167,7 @@ Every step brings at least a two-fold drop in execution time, so it is essential
 
 In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tesor concept. If you want to learn more about the algorithm, check the previous chapter for the links.
 
-### Gradient calculation with batches
+### Gradient calculation on batches
 
 Nearly all the implementations I've seen handles the `y'` array (matrix, tensor, whichever you want to call it) in a special way: storing the selected embeddings and the separator embedding in different data-structures and choosing where to get from variables on-the-fly. I've choosen a different approach, trading memory for performance: the assembled `y'` array contains the selected predictions with the embeddings as well. This approach enables us to use the tensor functions effectively in the gradient calculation. 
 
@@ -191,12 +197,12 @@ Now that we have `Z(t)` in hand, we can calculate the first equation.
 
 As you've probably guessed, the `alpha * beta` within the sum is the same thing we did when calculating `Z(t)`. the `sum lab` part is a fancy way of telling "sum up the same elements for the corresponding embedding and timestep". There are two things we can do to remain tensory as long as we can:
 - since `Z(t)` is a constant for every timestep, we can move the calculation into the inner part of the sum, which means we divide every element with the corresponding `Z(t)`.
-- y(k, t) behaves as a constant for the sum, it can be moved into the inner part of the sum too
+- `y(k, t)` behaves as a constant for the sum, it can be moved into the inner part of the sum too
 - we can observe, that the `y(k, t)` (which is the original prediction) in our case equals to `y'(k, t)` (which is the rearranged `y` matrix according to `l'`) and this holds true in every embedding location. The good part is that `y'` is perfectly arranged for the division we are about to do.
 
 The only drawback here is that the separator embedding will be divided `int(|l'|/2)` times more than just once. Also, if you have multiple instances of the same embedding the same thing applies - ex.: in the word 'alamo', `l'` is '\_a_l_a_m_o\_' and the timestep values referring to the embeddings 'a', and '\_' will to be divided more than once. This is the price for not having to rearrange structures in memory.
 
-> I consider executing the same divisions for keep everything in the Tensorflow pipeline a small price to pay. Using webGL in the browser, or using the pipelining and vectorization features of modern processors should even bring performance enhancements. But this needs to be tested.
+> I consider executing the same divisions on the same embeddings for keep everything in the Tensorflow pipeline a small price to pay. Using webGL in the browser, or using the pipelining and vectorization features of modern processors should even bring performance enhancements. But this needs to be tested.
 
 With this approach, we gain another optimalization: reusing the result of `a.mul(b).div(y)` we did for calculating `Z(t)` comes handy. So our final heavy lifting (calculating the inner part of the sum of the first equation) takes the following form:
 
@@ -206,6 +212,21 @@ const Zt = abDivY.sum(2, true); // setting it to true kepps the Zt tensor 3D ins
 const innerSum = abDivY.divNoNan(Zt); // 3D tensor can be diviced by a 3D tensor
 ```
 Now we can move on to sum up the unique embeddings of `l'` into our gradient tensor - but that's a TODO for now.
+
+### Variable length labels
+
+The first implementation of the algorithm only worked when the the encoded labels in the batch were the same length. The code was usable this way with restrictions:
+- batch size should be 1 **OR**,
+- arrange the labels to train only on ones that have the same length.
+
+Our friends at Google have thought about this problem, and came up with a good solution, which can be adapted to our case as well:
+- before the gradient calculation, pad `alpha`, `beta` and `y` arrays with `0` to have the extended labels' axis the size of `sequenceLenght*2+1`
+- the rationale behind using this number is that sequenceLength equals to the maximum number of predictable embedding, so the maximum the size of `l'` is `sequenceLenght*2+1`
+- filling up with zero does not affect our calculations: division by zero is handled by `divNoNan()`, and the extra multiplications can be made faster with the enhancements of TFJS engines. On the other hand, the summations (for example: calculating `Z(t)`) won't be affected neither because adding up more zeros is not a problem.
+
+For programming reasons, we keep track of the extended labels' embeddings (`bels` in the code), and this needs to be padded as well. In our representation, bels holds the label's embeddings' ids, so we needed to use one, that's not valid. In our case, it's `-1`, so it was pretty easy during the last summation to filter out the ones with this value.
+
+So to sum it up: careful padding does not screw up our calculations, and makes it possible to handle variable length label-matching.
 
 ## Contribution, discussion, etc
 
