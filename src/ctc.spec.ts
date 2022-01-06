@@ -1,5 +1,7 @@
 import * as tf from '@tensorflow/tfjs-node';
-import { ctcLossGradient, ctcLoss } from './ctc';
+import { test_util } from '@tensorflow/tfjs-core';
+import { ctcLossGradient, ctcLoss, decodeOneHot } from './ctc';
+import { expandShapeToKeepDim } from '@tensorflow/tfjs-core/dist/ops/axis_util';
 
 const EMBEDDINGS = "aábcčdeéfgďhiíjklmnñoóöőpqrsštťuúüűvwxyzž";
 
@@ -72,6 +74,27 @@ const loganLabels = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1], 
 const variInputs = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], [2, 4, 4]);
 const variLabels = tf.tensor([0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], [2, 4, 4]);
 
+// decodeOneHot test
+console.log(new Date(), 'trying to decodeOneHot function with oneLabel');
+const tst1 = decodeOneHot(oneLabel);
+console.log(new Date(), "finished decoding, should be: [ [ 3, 0, 29, 41, 41 ] ]. Result:", tst1);
+
+// speed comparison
+function logSpeed( fn: () => number ): void {
+    const start = new Date().getTime();
+    const elementNumber = fn();
+    const stop = new Date().getTime();
+
+    console.log(new Date(), 'ellapsed time:', stop-start, 'millisec, per batch element:', elementNumber == 0 ? 'N/A' : (stop-start)/elementNumber, 'millisec' );
+}
+
+const repetition = 100000;
+
+console.log(new Date(), "decodeOneHot speed test with", tf.getBackend());
+logSpeed( () => {
+    for (let i=0; i< repetition; i++) decodeOneHot(batchLabels);
+    return repetition;
+});
 
 // we have a gradient fucntion.
 const gFunc = tf.grads( (x, y) => ctcLossGradient(x, y));
@@ -131,7 +154,7 @@ model.compile({
     optimizer: tf.train.adam(),
     metrics: ['accuracy']
 });
-// model.summary();
+model.summary();
 
 async function modelTest() {
 
@@ -150,10 +173,10 @@ async function modelTest() {
      */
     const res2 = await model.fit(batchPrediction, batchLabels, {
         epochs: 10,
-        batchSize: 1
+        batchSize: 4
     });
 
     console.log(new Date(), res2.history.loss[0]);
 }
 
-// modelTest().then( () => { console.log(new Date(), "done"); });
+modelTest().then( () => { console.log(new Date(), "done"); });

@@ -228,6 +228,39 @@ For programming reasons, we keep track of the extended labels' embeddings (`bels
 
 So to sum it up: careful padding does not screw up our calculations, and makes it possible to handle variable length label-matching.
 
+
+## Decoding one-hot tensors - some dirty hacks
+
+There's a step, where we need to decode the labels, to gain the id's of the embeddings for later usage. I've developed two version of the code to check performance - each of them take a 3D tensor, and returns the ids of the place, where one-hot was located in a number[][] array:
+- arraySync the input tensor, and do it in the JavaScript way
+- do it with topk().indices.squeeze() and then arraySync-ed
+
+Running 100.000 iterations on a 7th gen i5 with tfjs-node and webgl backend, the results are the following:
+
+| Backend | JS method | tensory method |
+| ------- | --------- | -------------- |
+| tfjs-node | 1010 millisec | 10425 millisec |
+| webgl in browser  | 851 millisec | 3765 millisec |
+
+Let's rewrite the decode to return a tensor - since our aim is to keep everything as tensory as possible. The results are the following:
+
+| Backend | JS method | tensory method |
+| ------- | --------- | -------------- |
+| tfjs-node | 1662 millisec | 9344 millisec |
+| webgl in browser  | 1206 millisec | 3657 millisec |
+
+Not the increase on the JS side - converting back from array to tensor takes some time. But even that case, the JS method wins over the the tensory method. Interesting.
+
+Now, the only thing remains in favour of the tensory method, is it's compactness:
+
+```js
+return t.topk(1).indices.squeeze([2]);
+// vs
+return tf.tensor( (<number[][][]>t.arraySync()).map(b => b.map(e => e. reduce((p, c, i) => c === 1 ? i : p, -1))) );
+```
+
+Which is nice.
+
 ## Contribution, discussion, etc
 
 Currently, this project is for my own amusement. However, if you find it worthy for your attention, reach out to me here, or at the [Tensorflow Forum](https://discuss.tensorflow.org/t/ctc-loss-implementation-in-tfjs/6645)
