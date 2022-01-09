@@ -74,10 +74,12 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
         const delimiterIndex = embeddingLength - 1;
 
-        // TODO: this is for testing only the new, tensor-based approach
-        // const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
-        // const fwdTensors = forwardTensors(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+        // We are moving to tensory implementation
+        const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
+        const fwdTensors = forwardTensors(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+        const loss = <O>fwdTensors.batchLoss;
 
+        // TODO: this will be removed
         // onehots are decoded, then filtered not to include the delimiter, since it can confuse the algorithm
         const batchLabels = decodeOneHot(labels).map(e => e.filter((v) => v != delimiterIndex));
         // [batch][timesteps][embeddings] -> [batch][embeddings][timesteps]
@@ -85,10 +87,8 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         const prep = prepare(batchLabels, batchInputs, delimiterIndex);
         const batchExtendedLabels = prep.batchExtendedLabels; // l' in the papers
         const y = prep.yBatchMatrix;
-
-        const fwd = forward(batchExtendedLabels, y, sequenceLength);
-        const a = fwd.batchAlpha;
-        const loss = <O>tf.tensor(fwd.batchLoss);
+        // const fwd = forward(batchExtendedLabels, y, sequenceLength);
+        // const a = fwd.batchAlpha;
 
         const b = backward(batchExtendedLabels, y, sequenceLength);
         
@@ -96,12 +96,13 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         // we need padding to handle variable length senteces. maximum recognisable length is equal to sequenceLength, so the padding length should be 2*seqLen+1
         const padTo = sequenceLength*2+1;
 
-        const paddedY = padY(y, padTo, 0);
-        const paddedA = padFwdBwd(a, padTo, 0); 
+        // these are not required after we moved to tensory.
+        // const paddedY = padY(y, padTo, 0);
+        // const paddedA = padFwdBwd(a, padTo, 0); 
         const paddedB = padFwdBwd(b, padTo, 0); 
-        const paddedL = padLabels(batchExtendedLabels, padTo, -1);
+        // const paddedL = padLabels(batchExtendedLabels, padTo, -1);
         
-        save([paddedY, paddedA, paddedB, paddedL]);
+        save([prepTensor.batchPaddedY.transpose([0, 2, 1]), fwdTensors.batchPaddedAlpha, paddedB, prepTensor.batchPaddedExtendedLabels]);
 
         // dy is to multiply the gradient. check `Engine.prototype.gradients` in tf-core.node.js, we don't use it here
         const gradFunc = (dy: O, saved: Tensor[]) => {
@@ -130,7 +131,8 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
             belsArray.forEach( (batchItem, b) => {
                 const foundChar: number[] = [];
                 batchItem.forEach( (character, c) => {
-                    if (character != -1) { // -1 denotes it is a padder character not to be handled
+                    // the length if the original embeddings (which is out of bounds) denotes it is a padder character not to be handled
+                    if (character != embeddingLength) { 
                         // updating the gradient vector. every instance should be added up
                         for(let t = 0; t < sequenceLength; t++) {
                             retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
