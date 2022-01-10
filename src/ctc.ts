@@ -46,7 +46,7 @@ function ctcLoss_<T extends Tensor>(labels: T, predictions: T): Tensor {
     const delimiterIndex = embeddingLength - 1;
 
     const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
-    const fwdTensors = forwardTensors(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+    const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
 
     return fwdTensors.batchLoss;
 }
@@ -74,35 +74,12 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
         const delimiterIndex = embeddingLength - 1;
 
-        // We are moving to tensory implementation
         const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
-        const fwdTensors = forwardTensors(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+        const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+        const bwdTensor = backwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
         const loss = <O>fwdTensors.batchLoss;
 
-        // TODO: this will be removed
-        // onehots are decoded, then filtered not to include the delimiter, since it can confuse the algorithm
-        const batchLabels = decodeOneHot(labels).map(e => e.filter((v) => v != delimiterIndex));
-        // [batch][timesteps][embeddings] -> [batch][embeddings][timesteps]
-        const batchInputs = <number[][][]>predictions.transpose([0, 2, 1]).arraySync();
-        const prep = prepare(batchLabels, batchInputs, delimiterIndex);
-        const batchExtendedLabels = prep.batchExtendedLabels; // l' in the papers
-        const y = prep.yBatchMatrix;
-        // const fwd = forward(batchExtendedLabels, y, sequenceLength);
-        // const a = fwd.batchAlpha;
-
-        const b = backward(batchExtendedLabels, y, sequenceLength);
-        
-        // we shouldn't really do this, since Javascript retains the context. But, it forces us to make everything tenosry, so it's not a problem
-        // we need padding to handle variable length senteces. maximum recognisable length is equal to sequenceLength, so the padding length should be 2*seqLen+1
-        const padTo = sequenceLength*2+1;
-
-        // these are not required after we moved to tensory.
-        // const paddedY = padY(y, padTo, 0);
-        // const paddedA = padFwdBwd(a, padTo, 0); 
-        const paddedB = padFwdBwd(b, padTo, 0); 
-        // const paddedL = padLabels(batchExtendedLabels, padTo, -1);
-        
-        save([prepTensor.batchPaddedY.transpose([0, 2, 1]), fwdTensors.batchPaddedAlpha, paddedB, prepTensor.batchPaddedExtendedLabels]);
+       save([prepTensor.batchPaddedY.transpose([0, 2, 1]), fwdTensors.batchPaddedAlpha, bwdTensor, prepTensor.batchPaddedExtendedLabels]);
 
         // dy is to multiply the gradient. check `Engine.prototype.gradients` in tf-core.node.js, we don't use it here
         const gradFunc = (dy: O, saved: Tensor[]) => {
@@ -168,48 +145,6 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
 export const ctcLossGradient = op({ctcLossGradient_});
 
 /**
- * Preparing everyhting for a successful  CTC loss calculation. This will return both the one-hot character ids and the y matrix.
- * 
- * TODO: filtered batchlabels contain all the characters we need in the bels list and the y matrix. so instead of scanning through, we just need to prepare the bels variable from batch labels
- * TODO: tf.gather() can be used for this, and we can stay tensory as follows:
- * 
- * labels should be gathered in [separator label1 separator label2 ...] fashion to form batchExtendedLabels
- * then yBatchMatrix should be gathered according to batchExtendedLabels
- * 
- * @param batchLabels labels (ground truth) in the batch
- * @param batchTransposedInputs inputs (predictions) in the batch
- * @param delimiterIndex
- * @returns batchExtendedLabels - the id list of the encoded logit, yBatchMatrix - the y matrix of the CTC calculation
- */
-function prepare(batchLabels: number[][], batchTransposedInputs: number[][][], delimiterIndex: number): { batchExtendedLabels: number[][], yBatchMatrix: number[][][] } {
-
-    const batchExtendedLabels = <number[][]>[];
-
-    const yBatchMatrix = batchLabels.map( (x, i) => {
-        const ret: number[][] = [];
-        const extendedLabels = [];
-        
-        // the first one will allways be the separator
-        ret.push(batchTransposedInputs[i][delimiterIndex]);
-        extendedLabels.push(delimiterIndex);
-
-        // we get the predictions for the letter we were supposed to get
-        x.forEach( e => {
-            ret.push(batchTransposedInputs[i][e]); // these are the predictions corersponding to the letter we assume based on the labels' characters
-            ret.push(batchTransposedInputs[i][delimiterIndex]); // after every letter, we include a delimiter character
-
-            extendedLabels.push(e); // this is the index of the found characters. it will be needed for the forward/backward calculation
-            extendedLabels.push(delimiterIndex);
-        });
-
-        batchExtendedLabels.push(extendedLabels);
-        return ret;
-    });
-
-    return { batchExtendedLabels, yBatchMatrix }
-}
-
-/**
  * This will be the same function as prepare(), but works on tensors, and returns tensors. The process goes like this:
  * 
  * - pad the inputs with one extra row on the embedding level. This will be 0 everywhere, and the index will be the length of the original embedding size
@@ -224,7 +159,7 @@ function prepare(batchLabels: number[][], batchTransposedInputs: number[][][], d
  * @param delimiterIndex this index will be used as separator
  * @returns {batchPaddedExtendedLabels, paddedBatchY}
  */
-export function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex: number): { batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor } {
+function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex: number): { batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor } {
 
     const paddedInput = batchInputs.pad([[0, 0], [0, 0], [0, 1]]);
     const batchDecodedLabels = batchLabels.topk(1).indices.squeeze([2]); // oneHot decoding, [batch][timestep] = one-hot index
@@ -240,45 +175,6 @@ export function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimit
     const paddedBatchY = tf.gather(paddedInput, batchPaddedExtendedLabels, 2, 1);
 
     return { batchPaddedExtendedLabels, batchPaddedY: paddedBatchY }
-}
-
-/**
- * Pads a 3D array's second dimension  (length - |embedding|) times. It is needed to be able to convert variable length arrays to tensors
- * Since the given length is usually the number of timesteps, the result will be a square for all of the batch elements
- * 
- * @param batchInput [batch][timestep][l' embeddings]
- * @param padTo length to pad to (usually the seqLen*2+1)
- * @param padValue 
- * @returns 3D tensor which has the shape of [batch][length][timestep]
- */
-function padFwdBwd(batchInput: number[][][], padTo: number, padValue = 0): Tensor {
-    const ret = batchInput.map( x => {
-        return x.map( y => {
-            const padder = padTo - y.length;
-            return padder > 0 ? y.concat(new Array(padder).fill(padValue)) : y;
-        });
-    });
-    return tf.tensor3d(ret);
-}
-
-/**
- * Pads the Y matrix, which has a different shape than the alpha/beta matrix
- * 
- * @param batchInput 
- * @param embeddingLen 
- * @param padTo 
- * @param padValue 
- * @returns 
- */
-function padY(batchInput: number[][][], padTo: number, padValue = 0): Tensor {
-    batchInput.forEach( x => {
-        const padder = padTo - x.length;
-        const seqLen = x[0].length;
-        for(let i = 0; i < padder; i++) {
-            x.push( new Array(seqLen).fill(padValue));
-        }
-    });
-    return tf.tensor3d(batchInput);
 }
 
 /**
@@ -374,10 +270,10 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
  * @param batchPaddedExtendedLabels - padded l'
  * @param batchPaddedY - padded y'
  * @param sequenceLength
- * @param labelPadder - the which the labels were padded if they were shorter (usually the length of the embeddings)
+ * @param labelPadder - the id which the labels were padded if they were shorter (usually the length of the embeddings)
  * @returns {batchPaddedAlpha, batchLoss}
  */
-function forwardTensors(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, sequenceLength: number, labelPadder: number): { batchPaddedAlpha: Tensor, batchLoss: Tensor } {
+function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, sequenceLength: number, labelPadder: number): { batchPaddedAlpha: Tensor, batchLoss: Tensor } {
 
     const fwd = forward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
 
@@ -395,22 +291,26 @@ function forwardTensors(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
  * @param batchExtendedLabels l' parameter in batches
  * @param yBatchMatrix calculated parameters from the neural network
  * @param sequenceLength expected sequence length - the 2nd dimension of the batchextendedlabels, and the 3rd dim of the ybatchamatrix should equal to this
+ * @param labelPadder the id which the labels were padded if they were shorter (usually the length of the embeddings)
  * @returns pure beta paramteres as specified in the original paper: 9-10-11 equations
  */
-function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength: number): number[][][] {
+function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength: number, labelPadder = -1): number[][][] {
 
     const batchBeta = <number[][][]>[];
 
     batchExtendedLabels.forEach( (extendedLabel, i) => {
 
+        let labelLength = extendedLabel.findIndex( x => x === labelPadder );
+        if (labelLength < 0) labelLength = extendedLabel.length;
+        
         const ret = [];
 
         const initStep = new Array(extendedLabel.length).fill(0);
-        const lastElementNum = sequenceLength-1;
-        const c0 = yBatchMatrix[i][extendedLabel.length-1][lastElementNum] + yBatchMatrix[i][extendedLabel.length-2][lastElementNum];
+        const lastSeqStepId = sequenceLength-1;
+        const c0 = yBatchMatrix[i][labelLength-1][lastSeqStepId] + yBatchMatrix[i][labelLength-2][lastSeqStepId];
 
-        initStep[initStep.length - 1] = yBatchMatrix[i][extendedLabel.length-1][lastElementNum] / c0; // delimiter
-        initStep[initStep.length - 2] = yBatchMatrix[i][extendedLabel.length-2][lastElementNum] / c0; // last character
+        initStep[labelLength - 1] = yBatchMatrix[i][labelLength-1][lastSeqStepId] / c0; // delimiter
+        initStep[labelLength - 2] = yBatchMatrix[i][labelLength-2][lastSeqStepId] / c0; // last character
 
         ret.push(initStep);
 
@@ -418,9 +318,9 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
         for(let t = sequenceLength - 2; t >= 0; t--) {
             const bkwdStep = [];
 
-            const allowedIndex = extendedLabel.length - (sequenceLength - t - 3) * 2 - 1;
+            const allowedIndex = labelLength - (sequenceLength - t - 3) * 2 - 1;
             for(let l = 0; l < extendedLabel.length; l++) {
-                if (l < allowedIndex) {
+                if (l < allowedIndex && l < labelLength) {
 
                     let sum = prevStep[l];
                     sum += (l+1) < prevStep.length ? prevStep[l+1] : 0;
@@ -443,6 +343,26 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
     });
 
     return batchBeta;
+}
+
+
+/**
+ * Prepares the tensors for the original backward calculation. The inputs are the already padded l' and the y' tensors
+ * Wraps the results to tensors
+ * 
+ * TODO: this will be eventually the tensory calculation method. I include it here as a starting point to adjust gradient calculation functions
+ * 
+ * @param batchPaddedExtendedLabels - padded l'
+ * @param batchPaddedY - padded y'
+ * @param sequenceLength
+ * @param labelPadder - the id which the labels were padded if they were shorter (usually the length of the embeddings)
+ * @returns pure beta paramteres as specified in the original paper: 9-10-11 equations
+ */
+function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, sequenceLength: number, labelPadder: number): Tensor {
+
+    const beta = backward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
+
+    return tf.tensor(beta);
 }
 
 /**

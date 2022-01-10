@@ -1,7 +1,6 @@
 import * as tf from '@tensorflow/tfjs-node';
 import { test_util } from '@tensorflow/tfjs-core';
 import { ctcLossGradient, ctcLoss, decodeOneHot } from './ctc';
-import { expandShapeToKeepDim } from '@tensorflow/tfjs-core/dist/ops/axis_util';
 
 const EMBEDDINGS = "aábcčdeéfgďhiíjklmnñoóöőpqrsštťuúüűvwxyzž";
 
