@@ -332,6 +332,20 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
     return tf.tensor(beta);
 }
 
+
+/**
+ * Collects the relevant parts of the calculated gradients into the output tensors
+ * 
+ * TODO: outputShape contains embeddingLength and seqLength, they are unneccessary to pass to the function. Let's check.
+ * 
+ * @param outputShape should be equal to the input/label tensors' shape
+ * @param yParam - y' tensor (padded)
+ * @param grad - gradient tensor (padded)
+ * @param bels - batch extended labels (padded)
+ * @param embeddingLength - should be equal to the outputShape's 3rd value.
+ * @param sequenceLength - number of steps to anticipate
+ * @returns array of Tensors containing the gradients
+ */
 function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bels: Tensor, embeddingLength: number, sequenceLength: number  ): Tensor[] {
 
     const retY = <number[][][]>tf.fill(outputShape, 0).arraySync();
