@@ -358,29 +358,24 @@ function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bel
     const belsArray = <number[][]>bels.arraySync();
 
     belsArray.forEach( (batchItem, b) => {
-        const foundChar: number[] = [];
         batchItem.forEach( (character, c) => {
-            // the length if the original embeddings (which is out of bounds) denotes it is a padder character not to be handled
+            // the length if the original embeddings (which is out of bounds) denotes it is a padder character - not to be handled
             if (character != embeddingLength) { 
-                // updating the gradient vector. every instance should be added up
                 for(let t = 0; t < sequenceLength; t++) {
+                    // updating the gradient vector. every instance should be added up
                     retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
-                }
-                // every character only needed to be included once from the yParam matrix.
-                // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
-                if (!foundChar.includes(character)) {
-                    for(let t = 0; t < sequenceLength; t++) {
-                        retY[b][t][character] = retY[b][t][character] + yArray[b][c][t];
-                    }
-                    foundChar.push(character);
+                    // every character only needed to be included once from the yParam matrix.
+                    // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
+                    retY[b][t][character] = yArray[b][c][t];
                 }
             }
         });
     });
 
     // TODO: retY shoud be calculated lik this:
-    // - get the unique values from bels tensor. should be done with tf.unique()
-    // - use tf.scatterND() to aggregate?
+    // - get the unique values from bels tensor. should be done with tf.unique(). Nah. tf.unique() on 2d tensors pads values with themselves if tensory properties are broken. so: no.
+    // - use tf.gather() to aggregate?
+
 
     return [tf.tensor3d(retY), tf.tensor3d(retG)];
 }
