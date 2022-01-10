@@ -208,7 +208,7 @@ With this approach, we gain another optimalization: reusing the result of `a.mul
 
 ```js
 const abDivY = a.mul(b).divNoNan(y);
-const Zt = abDivY.sum(2, true); // setting it to true kepps the Zt tensor 3D instead of just 2D
+const Zt = abDivY.sum(2, true); // setting it to true keeps the Zt tensor 3D instead of just 2D
 const innerSum = abDivY.divNoNan(Zt); // 3D tensor can be diviced by a 3D tensor
 ```
 Now we can move on to sum up the unique embeddings of `l'` into our gradient tensor - but that's a TODO for now.
@@ -228,12 +228,11 @@ For programming reasons, we keep track of the extended labels' embeddings (`bels
 
 So to sum it up: careful padding does not screw up our calculations, and makes it possible to handle variable length label-matching.
 
-
 ## Decoding one-hot tensors - some dirty hacks
 
-There's a step, where we need to decode the labels, to gain the id's of the embeddings for later usage. I've developed two version of the code to check performance - each of them take a 3D tensor, and returns the ids of the place, where one-hot was located in a number[][] array:
+There's a step, where we need to decode the labels, to gain the id's of the embeddings for later usage. I've developed two version of the code to check performance - each of them take a 3D tensor, and returns the ids of the place, where one-hot was located in a `number[][]` array:
 - arraySync the input tensor, and do it in the JavaScript way
-- do it with topk().indices.squeeze() and then arraySync-ed
+- do it with `topk().indices.squeeze()` and then arraySync-ed
 
 Running 100.000 iterations on a 7th gen i5 with tfjs-node and webgl backend, the results are the following:
 
@@ -249,7 +248,7 @@ Let's rewrite the decode to return a tensor - since our aim is to keep everythin
 | tfjs-node | 1662 millisec | 9344 millisec |
 | webgl in browser  | 1206 millisec | 3657 millisec |
 
-Not the increase on the JS side - converting back from array to tensor takes some time. But even that case, the JS method wins over the the tensory method. Interesting.
+Note the increase on the JS side - converting back from array to tensor takes some time. But even in that case, the JS method wins over the the tensory method. Interesting.
 
 Now, the only thing remains in favour of the tensory method, is it's compactness:
 
@@ -260,6 +259,56 @@ return tf.tensor( (<number[][][]>t.arraySync()).map(b => b.map(e => e. reduce((p
 ```
 
 Which is nice.
+
+### Collecting the end-results - JS vs TS efficiency
+
+There's an ongoind debate whether to use TF in cases where there are more simpler solutions in JS. Generally, I'd say yes, but sometimes I see there are performance critical high-complexity functions where JS just yields better results, and it's simpler too. Collecting the data and mapping to the return tensors is such a problem. Let's dive in.
+
+We have `y'`, `l'` and `grad` in separate tensors. Our aim is to present two return tensors with the shape identical to the input tensor. All the values are zero, except where `l'` indicates otherwise (which is derived directly from the labeling). `retY` comes from `y'` directly, whereas `retG` comes from the `grad` but these values are not replaced but summed up if they are indicated in `l'` to be in multiple places.
+
+To be frank, I couldn't find a way to produce `retG` with native tensor functions. I was thinking about using `tf.unique()` for this which returns the unique variables in the tensors along the appropriate axis, but unfortunately it does not work: `tf.unique()` on 2d tensors pads values with themselves if tensory properties (different length for different rows) are broken. Try this:
+
+```JS
+const a = tf.tensor2d([[1, 2, 3], [1, 1, 1], [2, 0, 0]]);
+const {values, indices} = tf.unique(a, 1)
+values.print(); 
+indices.print();
+```
+The output will be this:
+```
+Tensor
+    [[1, 2, 3], // this is ok
+     [1, 1, 1], // this is not ok
+     [2, 0, 0]] // this isn't ok, neither
+Tensor
+    [0, 1, 2]
+```
+It's not ok, since we can't use these results for gathering data, so: no, I'll do it the JS way.
+
+Using a tensor buffer wouldn't seem to enhance things, so I stuck with standard arrays: iterate along all the dimensions, and map the results to the return tensor. Pretty easy, and we can handle the transposition as well.
+
+Contrary to `retG`, `retY` could be calculated like this:
+- Prepare an index from `l'` to be used with `tf.gather()`. Duplicates are overwritten multiple times, so we don't need to check wether it has been inserted already, or not.
+- Use `tf.gather()` on the `y'` tensor to aggregate according to the output shape
+
+Here's some code if you want to try it yourselves:
+
+```JS
+// prepare the gather tensor in an array form - which character should be inserted in the output tensor
+const mappedBelsArray = belsArray.map( batchItem => {
+  const ret = new Array(outputShape[2]).fill(batchItem.length);
+  batchItem.filter( x => x != outputShape[2] ).forEach( (character, idx) => ret[character] = idx );
+  return ret;
+});
+// pad the yParam to have a zero row, then do the gather based on mappedBelsArray. 
+const retTensorY = tf.gather(yParam.pad([[0, 0], [0, 1], [0, 0]]), mappedBelsArray, 1, 1).transpose([0, 2, 1]);
+// transpose is needed, since the end-result of gather has [batch, character, timestamp], and the input was [batch, timestamp, character]
+return [retTensorY, tf.tensor3d(retG)];
+```
+
+Plug it into the `collectTensors()` function, comment the declaration of `yParam` and `retY` variables, and also remove the `retY[]` overwriting in the innermost loop. The trick is, that we pad the original yParam tensor with one element, and reference that when we need a zero tensor in place.
+
+For me, running it on tfjs-node multiple times, it was 1.7 (JS) msec vs 2.18 msec (TF). WebGL should be faster in theory, but I havent't tried it (yet).
 
 ## Contribution, discussion, etc
 

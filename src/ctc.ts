@@ -334,7 +334,12 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
 
 
 /**
- * Collects the relevant parts of the calculated gradients into the output tensors
+ * Collects the relevant parts of the calculated gradients into the output tensors. Two tensors are returned:
+ * - the first is the y parameters of the embeddings indicated by the label (and the delimiter)
+ * - the second is the gradient, where all the indices of l' should be added up and inserted into the tensor
+ * 
+ * There's a debate wether it is useful to do the calculations in a tensory way. I've tried to do for the first tensor, but
+ * it was 25% slower on tfjs-node (1.7 msec vs 2.18 msec on average execution). Check readme for further elaboration.
  * 
  * TODO: outputShape contains embeddingLength and seqLength, they are unneccessary to pass to the function. Let's check.
  * 
@@ -371,11 +376,6 @@ function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bel
             }
         });
     });
-
-    // TODO: retY shoud be calculated lik this:
-    // - get the unique values from bels tensor. should be done with tf.unique(). Nah. tf.unique() on 2d tensors pads values with themselves if tensory properties are broken. so: no.
-    // - use tf.gather() to aggregate?
-
 
     return [tf.tensor3d(retY), tf.tensor3d(retG)];
 }
