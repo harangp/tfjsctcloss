@@ -85,52 +85,19 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         const gradFunc = (dy: O, saved: Tensor[]) => {
             const [yParam, aParam, bParam, bels] = saved;
 
-            // we need to calculate the gradient - we'll use equation nr. 16 in the original paper to do so, but there's a slight modification. check redme.
-            const ab = aParam.mul(bParam);
+            const ab = aParam.mul(bParam); // we'll use equation nr. 16 in the original paper to do so, but there's a slight modification. check redme.
 
             const yParamTransposed =  yParam.transpose([0, 2, 1]);
             const abDivY = ab.divNoNan(yParamTransposed); // for calculating Z(t)
 
             const Zt = abDivY.sum(2, true); // this is faster than tf.cumsum()
 
-            // this will be eq 16's second part. the divident is moved inside of the sum, because it's faster to calculate - we are tensory
+            // this will be eq 16's second part. the divider is moved inside of the sum, because it's faster to calculate - we are tensory
             const grad = neg(abDivY.divNoNan(Zt)).transpose([0, 2, 1]); //shape after transpose: [batch][character][time]
 
-            const retY = <number[][][]>tf.fill(labels.shape, 0).arraySync();
-            const retG = <number[][][]>tf.fill(labels.shape, 0).arraySync();
-            // note: this is faster than: tf.buffer(labels.shape).toTensor().arraySync(), and more faster than building a zero-filled array by hand
-
-            // let's just pick-and-sum the relevant character's values from 'grad' according to the 'sum' part of eq 16
-            const yArray = <number[][]>yParam.arraySync();
-            const gradArray = <number[][]>grad.arraySync();
-            const belsArray = <number[][]>bels.arraySync();
-
-            belsArray.forEach( (batchItem, b) => {
-                const foundChar: number[] = [];
-                batchItem.forEach( (character, c) => {
-                    // the length if the original embeddings (which is out of bounds) denotes it is a padder character not to be handled
-                    if (character != embeddingLength) { 
-                        // updating the gradient vector. every instance should be added up
-                        for(let t = 0; t < sequenceLength; t++) {
-                            retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
-                        }
-                        // every character only needed to be included once from the yParam matrix.
-                        // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
-                        if (!foundChar.includes(character)) {
-                            for(let t = 0; t < sequenceLength; t++) {
-                                retY[b][t][character] = retY[b][t][character] + yArray[b][c][t];
-                            }
-                            foundChar.push(character);
-                        }
-                    }
-                });
-            });
-
-            // TODO: retY shoud be calculated lik this:
-            // - get the unique values from bels tensor. should be done with tf.unique()
-            // - use tf.scatterND() to aggregate?
-
-            return [tf.tensor3d(retY), tf.tensor3d(retG)];
+            // summing up the relevant gradients to the return tensors
+            const res = collectTensors(labels.shape, yParam, grad, bels, embeddingLength, sequenceLength);
+            return res;
         }
 
         const ret = { value: loss, gradFunc };
@@ -364,6 +331,46 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
 
     return tf.tensor(beta);
 }
+
+function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bels: Tensor, embeddingLength: number, sequenceLength: number  ): Tensor[] {
+
+    const retY = <number[][][]>tf.fill(outputShape, 0).arraySync();
+    const retG = <number[][][]>tf.fill(outputShape, 0).arraySync();
+    // note: this is faster than: tf.buffer(labels.shape).toTensor().arraySync(), and more faster than building a zero-filled array by hand
+
+    // let's just pick-and-sum the relevant character's values from 'grad' according to the 'sum' part of eq 16
+    const yArray = <number[][]>yParam.arraySync();
+    const gradArray = <number[][]>grad.arraySync();
+    const belsArray = <number[][]>bels.arraySync();
+
+    belsArray.forEach( (batchItem, b) => {
+        const foundChar: number[] = [];
+        batchItem.forEach( (character, c) => {
+            // the length if the original embeddings (which is out of bounds) denotes it is a padder character not to be handled
+            if (character != embeddingLength) { 
+                // updating the gradient vector. every instance should be added up
+                for(let t = 0; t < sequenceLength; t++) {
+                    retG[b][t][character] = retG[b][t][character] + gradArray[b][c][t];
+                }
+                // every character only needed to be included once from the yParam matrix.
+                // TODO: is there a simpler way to achieve this? what this does is essentially masks the prediction tensor for the letters that are contained in the label, erverything else is ignored / zeroed
+                if (!foundChar.includes(character)) {
+                    for(let t = 0; t < sequenceLength; t++) {
+                        retY[b][t][character] = retY[b][t][character] + yArray[b][c][t];
+                    }
+                    foundChar.push(character);
+                }
+            }
+        });
+    });
+
+    // TODO: retY shoud be calculated lik this:
+    // - get the unique values from bels tensor. should be done with tf.unique()
+    // - use tf.scatterND() to aggregate?
+
+    return [tf.tensor3d(retY), tf.tensor3d(retG)];
+}
+
 
 /**
  * Decodes a 3D oneHot tensor to a 3D array representing the instance the onehot encoded character's place in the list
