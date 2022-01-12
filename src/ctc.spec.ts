@@ -1,12 +1,9 @@
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-node';
 import '@tensorflow/tfjs-backend-wasm';
-import { ctcLossGradient, ctcLoss, decodeOneHot } from './ctc';
+import { ctcLossGradient, ctcLoss, decodeOneHot, CTC_LOSS_USE_ARRAY_ENGINE } from './ctc';
 
 const EMBEDDINGS = "aábcčdeéfgďhiíjklmnñoóöőpqrsštťuúüűvwxyzž";
-
-console.log(new Date(), "entering production mode");
-tf.enableProdMode();
 
 // tf.setBackend("tensorflow").then( () => main() );
 tf.setBackend("cpu").then( () => main() );
@@ -23,7 +20,8 @@ function logSpeed( fn: () => number ): void {
 
 function main() {
 
-    console.log(new Date(), tf.ENV.features);
+    console.log(new Date(), tf.env().features);
+    console.log(new Date(), "ENV.CTC_LOSS_USE_ARRAY_ENGINE is set to", tf.env().getBool(CTC_LOSS_USE_ARRAY_ENGINE));
 
     // const labelDut = ['cat', 'cat', 'cat', 'cat'];
     // const labels = labelDut.map( x => Array.from(x).map( c => EMBEDDINGS.indexOf(c)));

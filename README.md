@@ -9,9 +9,10 @@ The goal of this project is to finalize a CTC loss calculator to enable pure Ten
 
 ## What will you find here
 
-The whole repository is just two files:
+The whole repository is just three files:
 - **ctc.ts** contains the loss calculator, the gradient custom operation, and a helper function for decoding the results.
 - **ctc.spec.ts** contains the test, and also some examples how to include it in the models.
+- **perf.spec.ts** contains some performance experiments.
 
 Otherwise, I will just document here my findings related to the implementation. I suggest checking out the PDF / Excel file which contains a careful calculation for a simple use-case, so you can follow what happens in each step, what is added up, what is multiplied, etc.
 
@@ -19,26 +20,28 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ### Changelog
 
+- **0.0.3** - Forward calculation is tensory. Fallback to Array-based solution is possible
 - **0.0.2** - Handles variable length labels in large batches.
 - **0.0.1** - Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice. 
 
 ### Currently woking on
 
-- Making the preparation and the gradient assembly functions more tensory
+- Making backward calculation tensory
 
 ### Known issues
 
 - Thee's no input validation - input and label mismatches will result in runtime error
 - No `tidy()` anywhere - larger fit() runs migth get out of memory errors.
+- `wasm` backend fails to run gradient calculation. `tensorflow` and `cpu` works just fine
 
 ### TODO
 
-- Unit tests - current tests are not comparing expected results.
+- Unit tests - current spec is not comparing expected results
 - Make it more tensory and depend less on JS native array operations
 
 ## Usage
 
-Just include ctc.ts in your code, and start to build your model. You can check the ctc.spec.ts for examples, but the general thing you do is something like this:
+Just include `ctc.ts` in your code, and start to build your model. You can check the ctc.spec.ts for examples, but the general thing you do is something like this:
 
 ```js
 import * as tf from '@tensorflow/tfjs-core';
@@ -72,6 +75,17 @@ Then you can use `model.fit()` as you usually would, with all the batches and ep
 - The **last one-hot embedding** is used as the delimiter - this is different than the current TF Python implementation
 - If the label is too short and does not fill the all the sequence, just padd it with the delimiter. All the delimiters are filtered when processing the labels, and are rebuilt from the ground.
 - If you want detect empty space between characters, or silence while processing sound, add an embedding for that too, don't use the delimiter for that.
+
+## Fallback to array-based calculation
+
+According to our performance the tests, the batch size and the backend engine has a great impact on performance.
+If you work with small batches (< 64), you can try to fallback to the Array-based calculation like this:
+
+```js
+import { CTC_LOSS_USE_ARRAY_ENGINE } from './ctc';
+tf.env().set(CTC_LOSS_USE_ARRAY_ENGINE, true);
+```
+You should run some of your own experiments testing which implementation suites you.
 
 ## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
@@ -156,12 +170,14 @@ const result = tensorA.mul(tensorB);
 ```
 If you would need to do it in a pure JavaScript way, with arrays, you would implement the cycles, do the math, and return a new array with the results.
 The execution depending on what's available for Tensorflow can be really different:
-- **tfjs only** - just like you would do it in pure javascript, but somebody has programmed it for you. Sweet.
-- **tfjs-wasm** - the core is implemented in WebAssembly, so there's a significant improvement on performance. Not all functions are supported though.
-- **tfjs-node** - kernel functions run natively on the processor, so you have the full power of your CPU, including the special instruction-sets you might have
+- **tfjs only** - just like you would do it in pure javascript, but somebody has programmed it for you. Sweet. Since modern JS engines are lightning fast, you'll get surprised how fast this implementation can run
+- **tfjs-wasm** - the core is implemented in WebAssembly, so there's a significant improvement on performance. Not all functions are supported though. It is by far the fastest one if you don't use any CUDA-based 
+- **tfjs-node** - kernel functions run natively on the processor, so you have the full power of your CPU, including the special instruction-sets you might have. However, usually you have to recompile Tensorflow from scratch to make use of it.
 - **tfjs-webgl** - kernel functions take advantage of the parallel processing capabilities of your GPU
 
-Every step brings at least a two-fold drop in execution time, so it is essential to have as many things as possible "tenosry". But it's not trivial - some of the operators are (albeit very useful) pretty hard to grasp. That's where the learning process and the cycle kicks in.
+You might think that every engine brings at least a two-fold drop in execution time, but that's not the case - check the end of this document for details. But, because the speed is so much reliant on the backend implementation, it is essential to have as many things as possible "tenosry". It's not trivial - some of the operators are (albeit very useful) pretty hard to grasp.
+
+That's where the learning process and the cycle kicks in.
 
 ## CTC algorithm implementation specialities
 
@@ -236,14 +252,14 @@ There's a step, where we need to decode the labels, to gain the id's of the embe
 
 Running 100.000 iterations on a 7th gen i5 with tfjs-node and webgl backend, the results are the following:
 
-| Backend | JS method | tensory method |
+| Backend | Array method | tensory method |
 | ------- | --------- | -------------- |
 | tfjs-node | 1010 millisec | 10425 millisec |
 | webgl in browser  | 851 millisec | 3765 millisec |
 
 Let's rewrite the decode to return a tensor - since our aim is to keep everything as tensory as possible. The results are the following:
 
-| Backend | JS method | tensory method |
+| Backend | Array method | tensory method |
 | ------- | --------- | -------------- |
 | tfjs-node | 1662 millisec | 9344 millisec |
 | webgl in browser  | 1206 millisec | 3657 millisec |
@@ -260,9 +276,9 @@ return tf.tensor( (<number[][][]>t.arraySync()).map(b => b.map(e => e. reduce((p
 
 Which is nice.
 
-### Collecting the end-results - JS vs TS efficiency
+### Collecting the end-results
 
-There's an ongoind debate whether to use TF in cases where there are more simpler solutions in JS. Generally, I'd say yes, but sometimes I see there are performance critical high-complexity functions where JS just yields better results, and it's simpler too. Collecting the data and mapping to the return tensors is such a problem. Let's dive in.
+There's an ongoind debate whether to use TF in cases where there are more simpler solutions using arrays. Generally, I'd say yes, but sometimes I see there are performance critical high-complexity functions where array-based methods just yields better results, and it's simpler too. Collecting the data and mapping to the return tensors is such a problem. Let's dive in.
 
 We have `y'`, `l'` and `grad` in separate tensors. Our aim is to present two return tensors with the shape identical to the input tensor. All the values are zero, except where `l'` indicates otherwise (which is derived directly from the labeling). `retY` comes from `y'` directly, whereas `retG` comes from the `grad` but these values are not replaced but summed up if they are indicated in `l'` to be in multiple places.
 
@@ -288,7 +304,7 @@ It's not ok, since we can't use these results for gathering data, so: no, I'll d
 Using a tensor buffer wouldn't seem to enhance things, so I stuck with standard arrays: iterate along all the dimensions, and map the results to the return tensor. Pretty easy, and we can handle the transposition as well.
 
 Contrary to `retG`, `retY` could be calculated like this:
-- Prepare an index from `l'` to be used with `tf.gather()`. Duplicates are overwritten multiple times, so we don't need to check wether it has been inserted already, or not.
+- Prepare an index from `l'` to be used with `tf.gather()`. Duplicates are overwritten multiple times, so we don't need to check whether it has been inserted already, or not.
 - Use `tf.gather()` on the `y'` tensor to aggregate according to the output shape
 
 Here's some code if you want to try it yourselves:
@@ -309,6 +325,69 @@ return [retTensorY, tf.tensor3d(retG)];
 Plug it into the `collectTensors()` function, comment the declaration of `yParam` and `retY` variables, and also remove the `retY[]` overwriting in the innermost loop. The trick is, that we pad the original yParam tensor with one element, and reference that when we need a zero tensor in place.
 
 For me, running it on tfjs-node multiple times, it was 1.7 (JS) msec vs 2.18 msec (TF). WebGL should be faster in theory, but I havent't tried it (yet).
+
+### Array vs. TensorFlow efficiency, speed, etc.
+
+As I mentioned earlier, I've put a great deal of thougth into the performance aspect of the implementation. I couldn't find any real explanation what's happening under the hood, so instead of planning ahead for performance (like I usually do) I experimented a lot with different approaches.
+
+I've already mentioned the kernel functions - it's TF's way of offloading the task to an implementing backend, be it native cpu, WebGL,or just stay in JS space. Now each of the handover and the processing of the return values comes at a price, but that's different at each backend. While using `wasm` or `cpu`, all the data remains in JS' memory space, in the other cases offloading / copy is neccessary. So you need to consider whether you push big enough data to the backend for complex, but optimized calculations which outweighs the price of handoff operations.
+
+Another aspect to consider, is the actual execution environment of the JS engine. The V8 engine that drives Chrome / Node.JS is fantastic in optimizing the code on the run. I strongly suggest to watch this presentation by Franziska Hinkelmann on this topic: [Speed, Speed, Speed: JavaScript vs C++ vs WebAssembly](https://www.youtube.com/watch?v=aC_QLLilwso) So it's not a far fetched idea to run our code with the `cpu` backend utilizing a pure JS-only solution.
+
+The last aspect to think about is that sometimes using TF's methods on tensors is just tedious work, and using arrays seems to be just more efficient. This is especially true if you try to implement complex, dynamic algorithms, which are not simple cases of adding, multiplying, averaging, etc on Tensors.
+
+At the begining I've developed the CTC algorithm using arrays, and later moved some of the parts to tensorflow methods. Currently, the major components' implementation style is as follows:
+
+| component      | Array-based | TF method based | Notes         |
+| ------         | :----:      | :-----:         | ------------- |
+| prepareTensor  |             | X               | Only filtering and padding is array-ish, everything else is tensory |
+| forwardTensor  | X           | X               | You can switch impmelentation with setting the `env` |
+| backwardTensor | X           |                 | Tensor implementation is a TODO |
+| gradFunc       |             | X               | There will never be an array-based solution |
+| collectTensors | X           |                 | See previous chapter for details |
+
+Bacause of this approach, I could make a comparision on the execution times. The test generates random input with the batch size, then calculates the loss 1.000 times. The heavy lifting of the operations work on `[batch][5][11]` sized float tensors, so you can get an idea of size of the data involved. The execution times using my (7th gen. i5 laptop running Win11) for **one batch** is plotted onto this chart:
+
+![Backend type and implementation impact on speed with different batch sizes](./doc/CTC%20batch%20performance%20v01.png)
+
+The interesting thing is, that there's a massive overhead for using TF methods running on tfjs-node. However, this is compensated at how it behaves at larger batches. What's interesting to note, that for the smallest batch numbers (up until 8), running the code on pure JS backend (`cpu`) is the fastest.
+
+Let's check the execution speed **per batch item** to see whether we have something notable (sorry for the log-scale chart):
+
+![Backend type and implementation impact on batch item calculation speed with different batch sizes](./doc/CTC%20batch%20item%20performance%20v01.png)
+
+So it seams that after a certain batch size (128), the calculation times settle - which is expcted, given the items have the same size, but the additional overhead working with batches is overcame by the large batch size.
+
+**What can we learn from this?**
+
+I've tested a lot of different approaches during this development. My bet is on the wasm backend, since smaller-scale tests ran, and I observer 2 to 4 times increase in performance. This means, to prepare for it, one **has to use** TF methods. Currently, something is wrong with using the loss calculation with wasm, so I'll need some time to figure it out, then I'll update the charts.
+
+On the mean time, for small batches, I'll run my experiments with tfjs-node, but with the cpu backend, I'll get all the infrastructure benefits with the speed provided by V8.
+
+On larger batches the native tfjs-node will be good - execution times are not as much different thant the array-based implementation. However, the later one will remain in the code for future reference.
+
+If you want to reproduce the results on your own system, just execute this command:
+
+```
+ts-node .\src\perf.spec.ts
+```
+This will run the different batch sizes on the available backends. Here are my execution times for reference:
+
+| Batch size | tf-node w. TF impl. | JS w. TF impl. |	tf-node w. Array impl. | JS w. Array impl. |  tf-node w. TF impl. per batch item | JS w. TF impl. per batch item |	tf-node w. Array impl. per batch item | JS w. Array impl. per batch item |
+| ---- | -------: | -------: | -------: | -------: | -------: | -------: | -------: | -------: |
+| 1 | 7,099 msec | 1,663 msec | 1,651 msec | **0,766** msec | 7,099000 msec | 1,663000 msec | 1,651000 msec | 0,766000 msec |
+| 2 | 6,799 msec | 2,059 msec | 1,536 msec | **0,708** msec | 3,399500 msec | 1,029500 msec | 0,768000 msec | 0,354000 msec |
+| 4 | 6,751 msec | 2,719 msec | 1,411 msec | **0,937** msec | 1,687750 msec | 0,679750 msec | 0,352750 msec | 0,234250 msec |
+| 8 | 6,986 msec | 4,283 msec | 1,641 msec | **1,564** msec | 0,873250 msec | 0,535375 msec | 0,205125 msec | 0,195500 msec |
+| 16 | 7,523 msec | 7,326 msec | **2,038** msec | 2,712 msec | 0,470188 msec | 0,457875 msec | 0,127375 msec | 0,169500 msec |
+| 32 | 8,944 msec | 13,693 msec | **2,827** msec | 5,383 msec | 0,279500 msec | 0,427906 msec | 0,088344 msec | 0,168219 msec |
+| 64 | 10,226 msec | 25,976 msec | **6,172** msec | 9,948 msec | 0,159781 msec | 0,405875 msec | 0,096438 msec | 0,155438 msec |
+| 128 | 14,311 msec | 51,954 msec | **8,864** msec | 20,994 msec | 0,111805 msec | 0,405891 msec | 0,069250 msec | 0,164016 msec |
+| 256 | 22,77 msec | 103,942 msec | **16,138** msec | 44,863 msec | 0,088945 msec | 0,406023 msec | 0,063039 msec | 0,175246 msec |
+| 512 | 41,455 msec | 210,922 msec | **36,626** msec | 89,933 msec | 0,080967 msec | 0,411957 msec | 0,071535 msec | 0,175650 msec |
+| 1024 | 90,383 msec | 433,42 msec | **85,509** msec | 197,19 msec | 0,088265 msec | 0,423262 msec | 0,083505 msec | 0,192568 msec |
+
+It is available on the Excel as well.
 
 ## Contribution, discussion, etc
 

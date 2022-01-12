@@ -25,6 +25,9 @@ import { Tensor, op, customGrad, GradSaveFunc, neg } from '@tensorflow/tfjs';
 import * as tf from '@tensorflow/tfjs';
 
 export const DELIMITER = '-';
+export const CTC_LOSS_USE_ARRAY_ENGINE = "CTC_LOSS_USE_ARRAY_ENGINE";
+
+tf.env().registerFlag(CTC_LOSS_USE_ARRAY_ENGINE, () => false );
 
 /**
  * Computes the CTC (Connectionist Temporal Classification) loss. 
@@ -164,18 +167,20 @@ function padLabels(bExtendedLabels: number[][], padTo: number, padValue = -1): T
 /**
  * Forward algoritm
  * 
- * The algorithm would generally underflow, so it's better to do it in the log space: log(a(t, l)) = log(e^(log(e^a(t-1, l) + e^(log(a(t-1, l-1)))))) + log(y(t))
- * The other way to do this is described in the original paper: normalizing the numbers on the go. We'll sitck with that.
+ * Generally, this array-based solution performs better than the tfjs one in `forwardTensor`, except for larger batches, and/or using wasm backend.
+ * You can use this approach by setting the `CTC_LOSS_USE_ARRAY_ENGINE` flag to `true`.
  * 
  * batch alpha has the shape of [batch][symbol, or z', or l'][timesteps]. Please note, that l' is padded with zeros because of tensorflow, so at the original length
  * of l' we need to clip the results.
+ * 
+ * Note: the algorithm would generally underflow, so generally it would be better to do it in the log space: 
+ * log(a(t, l)) = log(e^(log(e^a(t-1, l) + e^(log(a(t-1, l-1)))))) + log(y(t))
+ * The other way to do this is described in the original paper: normalizing the numbers on the go. We'll sitck with that.
  * 
  * @param batchExtendedLabels 
  * @param yBatchMatrix 
  * @param sequenceLength 
  * @returns batchAlpha 3D array of the alpha variable, batchLoss - 1D array containing the loss for eatch batch item
- * 
- * @deprecated use forwardTensor - though this implementation is generally the faster one. Please note, once wasm will be ready, this implementation doesn't have a chance
  */
 function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength:number, labelPadder = -1 ): { batchAlpha: number[][][], batchLoss: number[] } {
     const batchAlpha = <number[][][]>[];
@@ -232,19 +237,42 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
 }
 
 /**
- * Prepares the tensors for the original forward calculation.
+ * Forward calculation of the CTC loss with Tensorflow methods
  * 
- * batch alpha has the shape of [batch][symbol, or z', or l'][timesteps]. Please note, that l' is padded with zeros because of tensorflow, so at the original length
- * of l' we need to clip the results.
+ * The main idea is that for each calculation step, we slice the appropriate row from the padded y' tensor, shift it by one and two,
+ * and add up based on a tf.where evaluation which is based on wether the extended label's values are identical to the one 2 steps before.
+ * More than half of the calculation is relevant, since every other label in l' is the separator.
+ * 
+ * The second trick is that we let TF do it's job by using GPU on WebGL or special vectorization features of the processor to calculate
+ * everything in one go, then discard the unwanted calculations by applying (mul()-ing boolean) masks: one for the unreachable embeddings
+ * (affecting 1/3rd of the values) and the paddings (0 in the optimal case, but usually a larger portion).
+ * 
+ * The calculated interim tensors are then stacked up, and squeezed to match the required output.
+ * 
+ * The returning batch alpha has the shape of [batch][symbol, or z', or l'][timesteps].
+ * Please note, that l' is padded with zeros because of tensorflow, so at the original length of l' we need to clip the results
+ * 
+ * Note, that this approach shines when calculating with large batches (> 64 with tfjs-node) OR using WebAssembly backend. You can fall back
+ * to the array method by setting the CTC_LOSS_USE_ARRAY_ENGINE tf.env() variable to true.
  * 
  * @param batchPaddedExtendedLabels - padded l'
  * @param batchPaddedY - padded y'
  * @param batchExtendedLabelLengths - the length of the unpadded extended labels
  * @param sequenceLength
  * @param labelPadder - the id which the labels were padded if they were shorter (usually the length of the embeddings)
- * @returns {batchPaddedAlpha, batchLoss}
+ * @returns batchAlpha 3D Tensor of the alpha-hat variable, batchLoss - 1D Tensor containing the loss for eatch batch item
  */
 function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, batchExtendedLabelLengths: Tensor, sequenceLength: number, labelPadder: number): { batchPaddedAlpha: Tensor, batchLoss: Tensor } {
+
+    if (tf.env().getBool(CTC_LOSS_USE_ARRAY_ENGINE)) {
+        // proxy to the original calculation
+        const fwd = forward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
+
+        const batchPaddedAlpha = tf.tensor(fwd.batchAlpha);
+        const batchLoss = tf.tensor(fwd.batchLoss);
+
+        return { batchPaddedAlpha, batchLoss }
+    }
 
     // Let's check wether the second addition is needed or not. l'[x] === l'[x-2]. Shift = pad-then-slice. Pad should be done with a value that's out of bounds in the embeddings indexes
     const shiftedBpel = batchPaddedExtendedLabels.pad([[0, 0], [2, 0]], -1).slice(0, batchPaddedExtendedLabels.shape);
@@ -287,24 +315,6 @@ function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, 
     const bl = loss.squeeze([1, 2]);
 
     return { batchPaddedAlpha: bpa, batchLoss: bl }
-
-    /*
-    // proxy to the original calculation
-    const fwd = forward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
-
-    const batchPaddedAlpha = tf.tensor(fwd.batchAlpha);
-    const batchLoss = tf.tensor(fwd.batchLoss);
-
-    // console.log(new Date(), "alpha with new method and old method");
-    // bpa.print();
-    // batchPaddedAlpha.print();
-
-    // console.log(new Date(), "loss with new method and old method");
-    // bl.print();
-    // batchLoss.print();
-
-    return { batchPaddedAlpha, batchLoss }
-    */
 }
 
 /**
@@ -329,8 +339,6 @@ function prepareFwdMask(batchExtendedLabelLengths, bpyShape: number[], timestep:
 
     return ret;
 }
-
-
 
 /**
  * Calculating the backward variables (betas)
@@ -394,7 +402,6 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
     return batchBeta;
 }
 
-
 /**
  * Prepares the tensors for the original backward calculation. The inputs are the already padded l' and the y' tensors
  * Wraps the results to tensors
@@ -413,7 +420,6 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
 
     return tf.tensor(beta);
 }
-
 
 /**
  * Collects the relevant parts of the calculated gradients into the output tensors. Two tensors are returned:
@@ -462,11 +468,10 @@ function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bel
     return [tf.tensor3d(retY), tf.tensor3d(retG)];
 }
 
-
 /**
  * Decodes a 3D oneHot tensor to a 3D array representing the instance the onehot encoded character's place in the list
  * 
- * Plese note: this will require a one-hot encoded input. If this is not met, it will return with the last place where it found a '1'
+ * Please note: this will require a one-hot encoded input. If this is not met, it will return with the last place where it found a '1'
  * character, OR -1 if it couldn't find anything.
  * 
  * Investigating wheter tf.topk() could be used for this: yes, it could, but it's significantly slower (at least 3x, on node it's 8x).
