@@ -1,0 +1,75 @@
+<html>
+
+<head>
+    <title>WebGL test for tfjs CTC loss calculation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/3.12.0/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.12.0/dist/tf-backend-wasm.min.js"></script>
+    <script>
+
+console.log(new Date(), "entering production mode");
+tf.enableProdMode();
+
+// tf.setBackend("webgl").then( () => main() );
+// tf.setBackend("cpu").then( () => main() );
+tf.setBackend("wasm").then( () => main() );
+
+function main() {
+
+    console.log(new Date(), "Backend is:", tf.getBackend());
+    console.log(new Date(), tf.ENV.features);
+
+    // speed comparison
+    function logSpeed( fn ) {
+        const start = new Date().getTime();
+        const elementNumber = fn();
+        const stop = new Date().getTime();
+
+        console.log(new Date(), 'ellapsed time:', stop-start, 'millisec, per batch element:', elementNumber == 0 ? 'N/A' : (stop-start)/elementNumber, 'millisec' );
+    }
+
+    const groundTruth = [
+        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    ];
+
+    const y = tf.tensor(groundTruth).expandDims(1);
+    y.print();
+
+    const convRep = 10000;
+    console.log(new Date(), "calculating forward variables: convolution, with", tf.getBackend());
+    logSpeed( () => {
+        const filter1 = tf.ones([2, 1, 1]);
+        const filter2 = tf.ones([3, 1, 1]);
+        for(let i = 0; i < convRep; i++) {
+            tf.tidy( () => {        
+                y.pad([[0, 0], [0, 0], [1, 0]]).reverse(2).transpose([0, 2, 1]).conv1d(filter1, 1, "valid").transpose([0, 2, 1]).reverse(2);
+                y.pad([[0, 0], [0, 0], [2, 0]]).reverse(2).transpose([0, 2, 1]).conv1d(filter2, 1, "valid").transpose([0, 2, 1]).reverse(2);
+            });
+        }    
+        return convRep;
+    });
+
+    console.log(new Date(), "calculating forward variables: padding-and-add, with", tf.getBackend());
+    logSpeed( () => {
+        for(let i = 0; i < convRep; i++) {
+            tf.tidy( () => {
+                const pad1 = tf.add(y, y.pad([[0, 0], [0, 0], [1, 0]], 0).slice([0, 0, 0], y.shape));
+                const pad2 = tf.add(pad1, y.pad([[0, 0], [0, 0], [2, 0]], 0).slice([0, 0, 0], y.shape));
+            });
+        }    
+        return convRep;
+    });
+
+
+}
+    </script>
+</head>
+
+<body>
+    <p>Open the console to review results.</p>
+</body>
+
+</html>
