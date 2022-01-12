@@ -137,7 +137,7 @@ CTC is a dynamic algorithm, which means a lot of slicing / concatenation / condi
 
 ### Test
 
-CTC is a tricky alrgorythm, it has it's perks. The main problem is, that it requires lot's of data for the input, generates lot's of outputs, and it is hard to assemble a list of inputs - expected outputs pairs withouth doing tedious calculations. My approaxch is that there are obvious cases:
+CTC is a tricky alrgorythm, it has it's perks. The main problem is, that it requires lot's of data for the input, generates lot's of outputs, and it is hard to assemble a list of inputs - expected outputs pairs withouth doing tedious calculations. My approach is that there are obvious cases:
 - matching inputs and labels should return a zero loss and zero gradiens
 - random noise inputs should produce "something" other than error
 - should handle signle elements and batched elements
@@ -165,7 +165,7 @@ Every step brings at least a two-fold drop in execution time, so it is essential
 
 ## CTC algorithm implementation specialities
 
-In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tesor concept. If you want to learn more about the algorithm, check the previous chapter for the links.
+In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tensor concept. If you want to learn more about the algorithm, check the previous chapter for the links.
 
 ### Gradient calculation on batches
 

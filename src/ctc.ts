@@ -46,7 +46,7 @@ function ctcLoss_<T extends Tensor>(labels: T, predictions: T): Tensor {
     const delimiterIndex = embeddingLength - 1;
 
     const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
-    const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+    const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, prepTensor.batchExtendedLabelLengths, sequenceLength, embeddingLength);
 
     return fwdTensors.batchLoss;
 }
@@ -75,7 +75,7 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         const delimiterIndex = embeddingLength - 1;
 
         const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
-        const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
+        const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, prepTensor.batchExtendedLabelLengths, sequenceLength, embeddingLength);
         const bwdTensor = backwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
         const loss = <O>fwdTensors.batchLoss;
 
@@ -124,9 +124,9 @@ export const ctcLossGradient = op({ctcLossGradient_});
  * @param batchLabels labels (ground truth) in the batch
  * @param batchInputs predictions
  * @param delimiterIndex this index will be used as separator
- * @returns {batchPaddedExtendedLabels, paddedBatchY}
+ * @returns {batchPaddedExtendedLabels, paddedBatchY, batchExtendedLabelLengths}
  */
-function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex: number): { batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor } {
+function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex: number): { batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, batchExtendedLabelLengths: Tensor } {
 
     const paddedInput = batchInputs.pad([[0, 0], [0, 0], [0, 1]]);
     const batchDecodedLabels = batchLabels.topk(1).indices.squeeze([2]); // oneHot decoding, [batch][timestep] = one-hot index
@@ -140,8 +140,9 @@ function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex
 
     const batchPaddedExtendedLabels = padLabels(belsArray, batchInputs.shape[1] * 2 + 1, batchInputs.shape[2]);
     const paddedBatchY = tf.gather(paddedInput, batchPaddedExtendedLabels, 2, 1);
+    const batchExtendedLabelLengths = tf.tensor(belsArray.map( x => x.length ));
 
-    return { batchPaddedExtendedLabels, batchPaddedY: paddedBatchY }
+    return { batchPaddedExtendedLabels, batchPaddedY: paddedBatchY, batchExtendedLabelLengths }
 }
 
 /**
@@ -166,12 +167,15 @@ function padLabels(bExtendedLabels: number[][], padTo: number, padValue = -1): T
  * The algorithm would generally underflow, so it's better to do it in the log space: log(a(t, l)) = log(e^(log(e^a(t-1, l) + e^(log(a(t-1, l-1)))))) + log(y(t))
  * The other way to do this is described in the original paper: normalizing the numbers on the go. We'll sitck with that.
  * 
- * batch alpha has the shape of [batch][symbol, or z', or l'][timesteps]
+ * batch alpha has the shape of [batch][symbol, or z', or l'][timesteps]. Please note, that l' is padded with zeros because of tensorflow, so at the original length
+ * of l' we need to clip the results.
  * 
  * @param batchExtendedLabels 
  * @param yBatchMatrix 
  * @param sequenceLength 
  * @returns batchAlpha 3D array of the alpha variable, batchLoss - 1D array containing the loss for eatch batch item
+ * 
+ * @deprecated use forwardTensor - though this implementation is generally the faster one. Please note, once wasm will be ready, this implementation doesn't have a chance
  */
 function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength:number, labelPadder = -1 ): { batchAlpha: number[][][], batchLoss: number[] } {
     const batchAlpha = <number[][][]>[];
@@ -204,7 +208,6 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
                     // note: original paper states f(u) = u - 1 if l'(u) = blank or l'(u) = l'(u-2) 
                     // The first blank is handled (index can't be negative) all the other cases are covered with the later condition.
                     // The l-2 part is only added if character is not equal to the l-2. so current and previous is allways added
-                    // TODO: make the next line branchless to speed it up
                     const sum = prevStep[l] + (l-1 >= 0 ? prevStep[l-1] : 0) + (extendedLabel[l] === extendedLabel[l-2] ? 0 : l-2 >= 0 ? prevStep[l-2] : 0);
                     fwdStep.push( yBatchMatrix[i][l][t] * sum );
                 } else {
@@ -229,26 +232,105 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
 }
 
 /**
- * Prepares the tensors for the original forward calculation. The input is the already padded l' and the y' tensor
- * Wraps the results to tensors
+ * Prepares the tensors for the original forward calculation.
  * 
- * TODO: this will be eventually the tensory calculation method. I include it here as a starting point.
+ * batch alpha has the shape of [batch][symbol, or z', or l'][timesteps]. Please note, that l' is padded with zeros because of tensorflow, so at the original length
+ * of l' we need to clip the results.
  * 
  * @param batchPaddedExtendedLabels - padded l'
  * @param batchPaddedY - padded y'
+ * @param batchExtendedLabelLengths - the length of the unpadded extended labels
  * @param sequenceLength
  * @param labelPadder - the id which the labels were padded if they were shorter (usually the length of the embeddings)
  * @returns {batchPaddedAlpha, batchLoss}
  */
-function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, sequenceLength: number, labelPadder: number): { batchPaddedAlpha: Tensor, batchLoss: Tensor } {
+function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, batchExtendedLabelLengths: Tensor, sequenceLength: number, labelPadder: number): { batchPaddedAlpha: Tensor, batchLoss: Tensor } {
 
+    // Let's check wether the second addition is needed or not. l'[x] === l'[x-2]. Shift = pad-then-slice. Pad should be done with a value that's out of bounds in the embeddings indexes
+    const shiftedBpel = batchPaddedExtendedLabels.pad([[0, 0], [2, 0]], -1).slice(0, batchPaddedExtendedLabels.shape);
+    // integers can be safely checked against each other
+    const summaryChooser = batchPaddedExtendedLabels.equal(shiftedBpel).expandDims(1);
+
+    // let's prepare the masks. this will be unique for each batch item. remarkably simpple. you can mul() boolean and float numbers, it works.
+    const padddingMask = batchPaddedExtendedLabels.notEqual(tf.scalar(labelPadder)).expandDims(1);
+
+    // the first iteration: y[0] and y[1] is inserted, the other ones are filled with zeros
+    const init = batchPaddedY.slice([0, 0], [batchPaddedY.shape[0], 1, 2]).pad([[0, 0], [0, 0], [0, batchPaddedY.shape[2]-2]]);
+    const c0 = init.sum(2, true);
+    
+    let prevStep = init.divNoNan(c0);
+    let loss = c0.log().neg();
+
+    const stackable = [prevStep]; // results are collected here
+
+    for (let i = 1; i < batchPaddedY.shape[1]; i++) {
+        const y = batchPaddedY.slice([0, i, 0], [batchPaddedY.shape[0], 1, batchPaddedY.shape[2]]);
+
+        const fwdMask = prepareFwdMask(batchExtendedLabelLengths, batchPaddedY.shape, i);
+
+        // this is much speedier than doing a convolution (0.8019 msec vs 0.2439 msec in favour of the pad-and-add method)
+        const rollingSum1 = tf.add(prevStep, prevStep.pad([[0, 0], [0, 0], [1, 0]], 0).slice([0, 0, 0], prevStep.shape));
+        const rollingSum2 = tf.add(rollingSum1, prevStep.pad([[0, 0], [0, 0], [2, 0]], 0).slice([0, 0, 0], prevStep.shape));
+
+        // we choose either the y'[s] + y'[s-1] or y'[s] + y'[s-1] + y'[s-2] based on l'[s] = l'[s-2]
+        const fwdStep = tf.where(summaryChooser, rollingSum1, rollingSum2).mul(y).mul(fwdMask).mul(padddingMask);
+        const c = fwdStep.sum(2, true); // C(t) calculation, sum of all items
+
+        loss = loss.sub(c.log());
+
+        prevStep = fwdStep.divNoNan(c);
+
+        stackable.push(prevStep);
+    }
+
+    const bpa = tf.stack(stackable, 2).squeeze([1]);
+    const bl = loss.squeeze([1, 2]);
+
+    return { batchPaddedAlpha: bpa, batchLoss: bl }
+
+    /*
+    // proxy to the original calculation
     const fwd = forward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
 
     const batchPaddedAlpha = tf.tensor(fwd.batchAlpha);
     const batchLoss = tf.tensor(fwd.batchLoss);
 
+    // console.log(new Date(), "alpha with new method and old method");
+    // bpa.print();
+    // batchPaddedAlpha.print();
+
+    // console.log(new Date(), "loss with new method and old method");
+    // bl.print();
+    // batchLoss.print();
+
     return { batchPaddedAlpha, batchLoss }
+    */
 }
+
+/**
+ * Prepares the mask to filter out unwanted calculations.
+ * 
+ * TODO: so tmpMask is constant. The creation can be factored out. However, the creation process is pretty fast, so no need to hurry
+ * 
+ * @param batchExtendedLabelLengths 
+ * @param bpyShape 
+ * @param timestep 
+ * @returns 
+ */
+function prepareFwdMask(batchExtendedLabelLengths, bpyShape: number[], timestep: number): Tensor {
+
+    const tmpMask = tf.range(0, bpyShape[2], 1);
+    const stack = <Tensor[]>[];
+    for (let i = 0; i < bpyShape[0]; i++) stack.push( tmpMask.clone() );
+    const stackedMask = tf.stack(stack);
+
+    const allowedIndexes = batchExtendedLabelLengths.sub((bpyShape[1] - timestep) * 2).expandDims(1);
+    const ret = stackedMask.greaterEqual(allowedIndexes).expandDims(1);
+
+    return ret;
+}
+
+
 
 /**
  * Calculating the backward variables (betas)
@@ -443,5 +525,3 @@ export function decodeOneHot(t: Tensor): number[][] {
 
     return ret.map(x => x.replace(reg, ''));
 }
-
-
