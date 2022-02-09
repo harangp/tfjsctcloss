@@ -1,5 +1,6 @@
-# NPM node modules
+# NPM node modules, generated npm test runs
 package-lock.json
+*.tgz
 
 # Compiled binary addons (http://nodejs.org/api/addons.html)
 build/
