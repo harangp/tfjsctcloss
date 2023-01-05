@@ -20,6 +20,8 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ### Changelog
 
+- **0.0.5** - Upgrading to tfjs 4.2.0 dependency, alternative to 'ts-node stops working'
+- **0.0.4** - Typo
 - **0.0.3** - Forward calculation is tensory. Fallback to Array-based solution is possible
 - **0.0.2** - Handles variable length labels in large batches.
 - **0.0.1** - Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice. 
@@ -292,7 +294,13 @@ If you want to reproduce the results on your own system, just execute this comma
 ```
 ts-node .\src\perf.spec.ts
 ```
-This will run the different batch sizes on the available backends. Here are my execution times for reference:
+or
+```
+npm run perftest
+```
+*If the ts-node version does not work. (Please note, there might be problems, since there was a breaking change in TypeScript - issue nr. [49257](https://github.com/microsoft/TypeScript/issues/49257) and ts-node didn't catch up.)*
+
+This will run the different batch sizes on the available backends.  Here are my execution times for reference:
 
 | Batch size | tf-node w. TF impl. | JS w. TF impl. |	tf-node w. Array impl. | JS w. Array impl. |  tf-node w. TF impl. per batch item | JS w. TF impl. per batch item |	tf-node w. Array impl. per batch item | JS w. Array impl. per batch item |
 | ---- | -------: | -------: | -------: | -------: | -------: | -------: | -------: | -------: |

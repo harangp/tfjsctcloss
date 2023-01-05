@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-node';
-import '@tensorflow/tfjs-backend-wasm';
+// import '@tensorflow/tfjs-backend-wasm';
 import { ctcLossGradient, ctcLoss, decodeOneHot, CTC_LOSS_USE_ARRAY_ENGINE } from './ctc';
 
 const EMBEDDINGS = "aábcčdeéfgďhiíjklmnñoóöőpqrsštťuúüűvwxyzž";
