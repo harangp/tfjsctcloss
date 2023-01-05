@@ -335,18 +335,18 @@ Follow this guide: https://cameronnokes.com/blog/the-30-second-guide-to-publishi
 
 And read this, if you forgot what to do: https://betterstack.dev/blog/npm-package-best-practices/
 
-Do a build, run the tests, and commit your work into the repository. After that do the following:
+Do a build, run the tests, and commit your work into the repository. **Do NOT increase the version number in the package.json!** (npm version will do that for you) After that do the following:
 
 ```
 npm run build
-npm version patch|minor|majro
+npm version patch|minor|major
 git push --tags
 npm pack
 npm publish
 ```
 
 - `run build` will generate all the js files needed for the package
-- `version patch|minor|major` 
+- `version patch|minor|major` // this will create a git tag with increased patch/minor/major verion number 
 - `pack` will generate a file that will contain all the realase. Example: tfjsctcloss-0.0.3.tgz
 - make sure the package has all the right files 
 - `publish` will push the package into npm
