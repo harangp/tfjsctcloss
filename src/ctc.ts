@@ -26,8 +26,10 @@ import * as tf from '@tensorflow/tfjs';
 
 export const DELIMITER = '-';
 export const CTC_LOSS_USE_ARRAY_ENGINE = "CTC_LOSS_USE_ARRAY_ENGINE";
+export const CTC_LOSS_USE_DY_IN_GRAD_FUNC = "CTC_LOSS_USE_DY_IN_GRAD_FUNC";
 
 tf.env().registerFlag(CTC_LOSS_USE_ARRAY_ENGINE, () => false );
+tf.env().registerFlag(CTC_LOSS_USE_DY_IN_GRAD_FUNC, () => false );
 
 /**
  * Computes the CTC (Connectionist Temporal Classification) loss. 
@@ -100,6 +102,12 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
 
             // summing up the relevant gradients to the return tensors
             const res = collectTensors(labels.shape, yParam, grad, bels, embeddingLength, sequenceLength);
+
+            // just to be compatible with layers. if this is used in gradient calculation at the end of your model (during model.fit)
+            // dy is allyways [1] (since it's the first element). if you want to speed it up, just enable CTC_LOSS_USE_DY_IN_GRAD_FUNC
+            if (tf.env().getBool(CTC_LOSS_USE_DY_IN_GRAD_FUNC))
+                res.forEach( x => dy.mul(x) );
+
             return res;
         }
 
@@ -465,7 +473,15 @@ function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bel
         });
     });
 
-    return [tf.tensor3d(retY), tf.tensor3d(retG)];
+    const rY = tf.tensor3d(retY);
+    const rG = tf.tensor3d(retG);
+
+    // this was for testing purposes to see which tensor is used in backpropagation:
+    // return [tf.ones(rY.shape), tf.zeros(rG.shape)]; 
+    // turns out, only the second (the one that is related to the logits)
+    // however, the negatives of the prediction is ginven as well, just to be correct regarding the "truth" part
+    // gradient is calculated according to (16) equation (remember, we've alread neg()-ed sumABper(zt_mul_y), so it's just an addition)
+    return [rY.neg(), rY.add(rG)];
 }
 
 /**

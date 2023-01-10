@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc",
     "perftest": "tsc && node ./build/perf.spec.js",
-    "perftest:ctc": "tsc && node ./build/ctc.spec.js",
+    "test:node": "tsc && node ./build/ctc.spec.js",
     "test": "tsc && jasmine --config=jasmine.json"
   },
   "dependencies": {

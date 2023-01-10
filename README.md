@@ -20,7 +20,8 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ### Changelog
 
-- **0.0.5** - Upgrading to tfjs 4.2.0 dependency, alternative to 'ts-node stops working'
+- **0.6.0** - Fixed gradient propagation
+- **0.5.1** - Upgrading to tfjs 4.2.0 dependency, alternative to 'ts-node stops working'
 - **0.0.4** - Typo
 - **0.0.3** - Forward calculation is tensory. Fallback to Array-based solution is possible
 - **0.0.2** - Handles variable length labels in large batches.
@@ -43,7 +44,9 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ## Usage
 
-Just include `ctc.ts` in your code, and start to build your model. You can check the ctc.spec.ts for examples, but the general thing you do is something like this:
+### Include code
+
+The simplest way is to just include `ctc.ts` in your code, and start to build your model. You can check the `ctc.spec.ts` for examples, but the general thing you do is something like this:
 
 ```js
 import * as tf from '@tensorflow/tfjs-core';
@@ -69,6 +72,28 @@ model.summary();
 ```
 Then you can use `model.fit()` as you usually would, with all the batches and epochs, etc.
 
+### Using NPM
+
+You can use NPM as well, just do the usual installation procedure:
+
+```
+npm install tfjsctcloss --save
+```
+
+Then you can use the standard import in your TypeScript file:
+
+``` JS
+import { ctcLossGradient } from 'tfjsctcloss';
+```
+
+*NOTE: if eslint throws an error because it couldn't find the package, just add:
+
+``` JS
+"moduleResolution": "node" /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */
+```
+
+line in the `compilerOptions` part of your `tsconfig.json` file.
+
 ### Inputs, labels and special restrictions
 
 - This implementation operates on a 3D tensor: `[batch][(time)step][one-hot encoded embeddings]`.
@@ -84,10 +109,20 @@ According to our performance the tests, the batch size and the backend engine ha
 If you work with small batches (< 64), you can try to fallback to the Array-based calculation like this:
 
 ```js
-import { CTC_LOSS_USE_ARRAY_ENGINE } from './ctc';
+import { CTC_LOSS_USE_ARRAY_ENGINE } from 'tfjsctcloss';
 tf.env().set(CTC_LOSS_USE_ARRAY_ENGINE, true);
 ```
 You should run some of your own experiments testing which implementation suites you.
+
+### Using dy in gradient calculation
+
+Altough the proper way of dealing with gradient functions is to include the dy Tensor in the calculation. However, for th intended usage, dy is allwas [1], so multiplying doesn't do anything, just wastes resources. If you still need it, you can turn the feature on with setting `CTC_LOSS_USE_DY_IN_GRAD_FUNC` to `true` like this:
+
+```js
+import { CTC_LOSS_USE_DY_IN_GRAD_FUNC } from 'tfjsctcloss';
+tf.env().set(CTC_LOSS_USE_DY_IN_GRAD_FUNC, true);
+```
+The default is `false`.
 
 ## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
