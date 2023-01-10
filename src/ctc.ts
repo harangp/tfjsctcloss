@@ -190,7 +190,7 @@ function padLabels(bExtendedLabels: number[][], padTo: number, padValue = -1): T
  * @param sequenceLength 
  * @returns batchAlpha 3D array of the alpha variable, batchLoss - 1D array containing the loss for eatch batch item
  */
-function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength:number, labelPadder = -1 ): { batchAlpha: number[][][], batchLoss: number[] } {
+function forwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength:number, labelPadder = -1 ): { batchAlpha: number[][][], batchLoss: number[] } {
     const batchAlpha = <number[][][]>[];
     const batchLoss  = <number[]>[];
 
@@ -203,12 +203,12 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
         if (labelLength < 0) labelLength = extendedLabel.length;
 
         const initStep = new Array(extendedLabel.length).fill(0);
-        const c0 = yBatchMatrix[i][0][0] + yBatchMatrix[i][1][0]; // rescale
+        const c0 = yBatchMatrix[i][0][0] + yBatchMatrix[i][1][0]; // for rescale
 
         let loss = -Math.log(c0);
 
-        initStep[0] = yBatchMatrix[i][0][0] / c0;
-        initStep[1] = yBatchMatrix[i][1][0] / c0;
+        initStep[0] = c0 == 0 ? 0 : yBatchMatrix[i][0][0] / c0;
+        initStep[1] = c0 == 0 ? 0 : yBatchMatrix[i][1][0] / c0;
         ret.push(initStep);
 
         let prevStep = initStep;
@@ -230,7 +230,7 @@ function forward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], se
             }
 
             const c = fwdStep.reduce( (prev, curr) => prev + curr, 0); // C(t) calculation, sum of all items
-            prevStep = fwdStep.map( x => x / c); // normalization to prevent under / overflow
+            prevStep = fwdStep.map(x =>  c == 0 ? 0 : x / c); // normalization to prevent under/overflow and divNoNaN
 
             loss -= Math.log(c);
 
@@ -274,7 +274,7 @@ function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, 
 
     if (tf.env().getBool(CTC_LOSS_USE_ARRAY_ENGINE)) {
         // proxy to the original calculation
-        const fwd = forward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
+        const fwd = forwardArray(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
 
         const batchPaddedAlpha = tf.tensor(fwd.batchAlpha);
         const batchLoss = tf.tensor(fwd.batchLoss);
@@ -368,7 +368,7 @@ function prepareFwdMask(batchExtendedLabelLengths: Tensor, bpyShape: number[], t
  * @param labelPadder the id which the labels were padded if they were shorter (usually the length of the embeddings)
  * @returns pure beta paramteres as specified in the original paper: 9-10-11 equations
  */
-function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength: number, labelPadder = -1): number[][][] {
+function backwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][][], sequenceLength: number, labelPadder = -1): number[][][] {
 
     const batchBeta = <number[][][]>[];
 
@@ -383,10 +383,12 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
         const lastSeqStepId = sequenceLength-1;
         const c0 = yBatchMatrix[i][labelLength-1][lastSeqStepId] + yBatchMatrix[i][labelLength-2][lastSeqStepId];
 
-        // TODO: handle cases where c0 is 0, and we divide by 0
-
         initStep[labelLength - 1] = yBatchMatrix[i][labelLength-1][lastSeqStepId] / c0; // delimiter
         initStep[labelLength - 2] = yBatchMatrix[i][labelLength-2][lastSeqStepId] / c0; // last character
+
+        // div by zero handling (divNoNaN)
+        if (isNaN(initStep[labelLength - 1])) initStep[labelLength - 1] = 0;
+        if (isNaN(initStep[labelLength - 2])) initStep[labelLength - 2] = 0;
 
         ret.push(initStep);
 
@@ -409,9 +411,7 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
             }
 
             const c = bkwdStep.reduce( (prev, curr) => prev + curr, 0); // C(t) calculation, sum of all items
-            prevStep = bkwdStep.map( x => x / c); // normalization to prevent under / overflow
-
-            // TODO: handle division by zero
+            prevStep = bkwdStep.map( x => c == 0 ? 0 : x / c); // normalization to prevent under/overflow with divNoNaN
 
             ret.push( prevStep );
         }
@@ -437,7 +437,7 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
  */
 function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, sequenceLength: number, labelPadder: number): Tensor {
 
-    const beta = backward(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
+    const beta = backwardArray(<number[][]>batchPaddedExtendedLabels.arraySync(), <number[][][]>batchPaddedY.transpose([0, 2, 1]).arraySync(), sequenceLength, labelPadder);
 
     return tf.tensor(beta);
 }
