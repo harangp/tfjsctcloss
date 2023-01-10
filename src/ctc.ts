@@ -128,7 +128,7 @@ export const ctcLossGradient = op({ctcLossGradient_});
  * - pad the inputs with one extra row on the embedding level. This will be 0 everywhere, and the index will be the length of the original embedding size
  * - do the one-hot detection on the label tensor - using `topk`, location of the highest value
  * - get the array representation, and iterate through the timestep arrays
- * - filter the resulst for the delimiter, and insert a delimiter for every character 
+ * - filter the resulst for the delimiter (removing all of them), and insert a delimiter for every character 
  * - pad the thing to |l|*2+1 with the value |l|
  * - gather the instances from the padded inputs according to the padded labels, and return it 
  * 
@@ -145,7 +145,7 @@ function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex
     const belsArray = (<number[][]>batchDecodedLabels.arraySync()).map( x => {
         const ret = <number[]>[];
         x.filter(y => y != delimiterIndex).forEach(z => ret.push(delimiterIndex, z));
-        ret.push(delimiterIndex);
+        ret.push(delimiterIndex); // this is the last delimiter at the end of the line
         return ret;
     });
 
@@ -326,18 +326,27 @@ function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, 
 }
 
 /**
- * Prepares the mask to filter out unwanted calculations.
+ * Prepares the mask to filter out unwanted calculations in the forward tensor. This enforces the rule defined afther the
+ * equation Graves (7): [at(s) = 0 for every s < |l'|-2(T-t)-1] In our case s is the character dimension, |l'| is extendedLabelLengths,
+ * T is the number of timesteps (constant) and t is the actual timestep we want to calculate.
  * 
+ * The mask preparation seems complex, but it tries to use as much tensory features as possible.
+ * - prepare a range of numbers in a 1D tensor
+ * - clone it as many times as we have batches (push into an array, then stack them) 
+ * - calculate the allowed indexes with this forumla: [labellength - 2*(timesteps - t)] this is exactly the same, but takes into account the array index notation
+ * - use the greaterEqual operation, which compares all the range numbers to the maximul allowed, and return a boolean.
+ * 
+ * TODO: is there a more efficient way to prepare the range tensor?
  * TODO: so tmpMask is constant. The creation can be factored out. However, the creation process is pretty fast, so no need to hurry
  * 
  * @param batchExtendedLabelLengths 
- * @param bpyShape 
- * @param timestep 
- * @returns 
+ * @param bpyShape shape array of the y' matrix
+ * @param timestep which timestep we are calculating for. starts from zero, as we work with array indexes
+ * @returns boolean Tensor defining a mask with exact batch shape for the given timestep
  */
-function prepareFwdMask(batchExtendedLabelLengths, bpyShape: number[], timestep: number): Tensor {
+function prepareFwdMask(batchExtendedLabelLengths: Tensor, bpyShape: number[], timestep: number): Tensor {
 
-    const tmpMask = tf.range(0, bpyShape[2], 1);
+    const tmpMask = tf.range(0, bpyShape[2], 1, "int32");
     const stack = <Tensor[]>[];
     for (let i = 0; i < bpyShape[0]; i++) stack.push( tmpMask.clone() );
     const stackedMask = tf.stack(stack);
@@ -374,6 +383,8 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
         const lastSeqStepId = sequenceLength-1;
         const c0 = yBatchMatrix[i][labelLength-1][lastSeqStepId] + yBatchMatrix[i][labelLength-2][lastSeqStepId];
 
+        // TODO: handle cases where c0 is 0, and we divide by 0
+
         initStep[labelLength - 1] = yBatchMatrix[i][labelLength-1][lastSeqStepId] / c0; // delimiter
         initStep[labelLength - 2] = yBatchMatrix[i][labelLength-2][lastSeqStepId] / c0; // last character
 
@@ -383,9 +394,9 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
         for(let t = sequenceLength - 2; t >= 0; t--) {
             const bkwdStep = [];
 
-            const allowedIndex = labelLength - (sequenceLength - t - 3) * 2 - 1;
+            const allowedIndex = (t + 1) * 2 - 1; // Graves notes under eq (11)
             for(let l = 0; l < extendedLabel.length; l++) {
-                if (l < allowedIndex && l < labelLength) {
+                if (l <= allowedIndex && l < labelLength) {
 
                     let sum = prevStep[l];
                     sum += (l+1) < prevStep.length ? prevStep[l+1] : 0;
@@ -399,6 +410,8 @@ function backward(batchExtendedLabels: number[][], yBatchMatrix: number[][][], s
 
             const c = bkwdStep.reduce( (prev, curr) => prev + curr, 0); // C(t) calculation, sum of all items
             prevStep = bkwdStep.map( x => x / c); // normalization to prevent under / overflow
+
+            // TODO: handle division by zero
 
             ret.push( prevStep );
         }
