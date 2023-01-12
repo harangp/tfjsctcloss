@@ -156,12 +156,67 @@ function main() {
     ret5.forEach(x => x.print());
 
     /** ------------------- unit test ----------------------
+     * Let's compare the results to Tensorflow's Python implementation. It's safe to assume, that for the same inputs, the same outputs are generated.
+     * However, there's a catch: pyTF.ctc_loss() takes different structures of input: the labels are NOT one-hot encoded, and the logits are served
+     * as-is, and the algorythm performs a log_softmax() on it. To compare the two, a softmax-ed input should be fed to TFJS, and inspect the results.
+     * The expected results should be:
+     *
+     *   CTC loss: [4.448741]
+     *   CTC gradients:  [[
+     *   [-0.51064587  0.17487772  0.17487772  0.16089036]
+     *   [ 0.12286875  0.17487772 -0.6697599   0.37201348]
+     *   [-0.29322746  0.17487772 -0.01850624  0.13685611]
+     *   [-0.15988137  0.17487772 -0.20941935  0.1944232 ]
+     *   [ 0.17487772  0.17487772 -0.5441786   0.19442326]
+     *   ]]
+     */
+    const pyLabels = tf.tensor([[
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 0, 1]
+    ]]);
+    const pyLogits = tf.tensor([[
+        [1.0, 0.0, 0.0, 0.0], 
+        [0.0, 0.0, 0.0, 1.0], 
+        [1.0, 0.0, 0.0, 0.0], 
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ]]);
+
+    const expectedGradient = tf.tensor([[
+        [-0.51064587,  0.17487772,  0.17487772,  0.16089036],
+        [ 0.12286875, -0.6697599 ,  0.17487772,  0.37201348],
+        [-0.29322746, -0.01850624,  0.17487772,  0.13685611],
+        [-0.15988137, -0.20941935,  0.17487772,  0.1944232 ],
+        [ 0.17487772, -0.5441786 ,  0.17487772,  0.19442326]
+    ]]);
+    const expectedLoss = tf.tensor([4.448741]);
+
+    console.log(new Date(), 'trying to calculate GRADIENTS outside of fit() on Python Tensorflow input:', pyLogits.shape);
+    const ret6 = ctcLoss(pyLabels, pyLogits);
+    const ret7 = gFunc([pyLabels, pyLogits]);
+    console.log(new Date(), 'finished calculating grad calculation on Python Tensorflow input.');
+
+    console.log('CTC loss:');
+    ret6.print();    
+    const check6 = expectedLoss.sub(ret6).flatten().sum().arraySync();
+    console.log(new Date(), 'Deviation from exptected loss:', check6);
+
+    console.log(new Date(), 'CTC gradients:');
+    ret7.forEach(x => x.print());
+
+    const check7 = expectedGradient.sub(ret7[1]).flatten().sum().arraySync();
+    console.log(new Date(), 'Deviation from expected gradient:', check7);
+
+    /** ------------------- unit test ----------------------
      * CTC loss / gradient working inside of fit() - this is a standard model we'll use
      */
     console.log(new Date(), 'Building model for model tests');
     const model = tf.sequential();
     model.add(tf.layers.inputLayer({ name: 'inputLayer', inputShape: [5, 42] }));
-    model.add(tf.layers.dense({ name: 'denseLayer', units: 42, kernelInitializer: 'ones', useBias: false, activation: 'softmax'}))
+    model.add(tf.layers.dense({ name: 'denseLayer', units: 42, kernelInitializer: 'ones', useBias: false, activation: 'relu'}))
     model.compile({
         loss: ctcLossGradient,
         optimizer: tf.train.adam(),

@@ -50,7 +50,10 @@ function ctcLoss_<T extends Tensor>(labels: T, predictions: T): Tensor {
     // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
     const delimiterIndex = embeddingLength - 1;
 
-    const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
+    // we have to normalize the inputs. This is important: gradients are calculated against UNNORMALIZED inputs!
+    const softmaxPredictions = predictions.softmax();
+
+    const prepTensor = prepareTensors(labels, softmaxPredictions, delimiterIndex);
     const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, prepTensor.batchExtendedLabelLengths, sequenceLength, embeddingLength);
 
     return fwdTensors.batchLoss;
@@ -79,16 +82,19 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
         // TODO: as I've seen, the python implementation moved from the last index to the first (0) index. Let's revise.
         const delimiterIndex = embeddingLength - 1;
 
-        const prepTensor = prepareTensors(labels, predictions, delimiterIndex);
+        // we have to normalize the inputs. This is important: gradients are calculated against UNNORMALIZED inputs!
+        const softmaxPredictions = predictions.softmax();
+
+        const prepTensor = prepareTensors(labels, softmaxPredictions, delimiterIndex);
         const fwdTensors = forwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, prepTensor.batchExtendedLabelLengths, sequenceLength, embeddingLength);
         const bwdTensor = backwardTensor(prepTensor.batchPaddedExtendedLabels, prepTensor.batchPaddedY, sequenceLength, embeddingLength);
         const loss = <O>fwdTensors.batchLoss;
 
-       save([prepTensor.batchPaddedY.transpose([0, 2, 1]), fwdTensors.batchPaddedAlpha, bwdTensor, prepTensor.batchPaddedExtendedLabels]);
+        save([prepTensor.batchPaddedY.transpose([0, 2, 1]), fwdTensors.batchPaddedAlpha, bwdTensor, prepTensor.batchPaddedExtendedLabels, softmaxPredictions]);
 
         // dy is to multiply the gradient. check `Engine.prototype.gradients` in tf-core.node.js, we don't use it here
         const gradFunc = (dy: O, saved: Tensor[]) => {
-            const [yParam, aParam, bParam, bels] = saved;
+            const [yParam, aParam, bParam, bels, smPredictions] = saved;
 
             const ab = aParam.mul(bParam); // we'll use equation nr. 16 in the original paper to do so, but there's a slight modification. check redme.
 
@@ -98,10 +104,10 @@ function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: 
             const Zt = abDivY.sum(2, true); // this is faster than tf.cumsum()
 
             // this will be eq 16's second part. the divider is moved inside of the sum, because it's faster to calculate - we are tensory
-            const grad = neg(abDivY.divNoNan(Zt)).transpose([0, 2, 1]); //shape after transpose: [batch][character][time]
+            const gradPart = neg(abDivY.divNoNan(Zt)).transpose([0, 2, 1]); //shape after transpose: [batch][character][time]
 
             // summing up the relevant gradients to the return tensors
-            const res = collectTensors(labels.shape, yParam, grad, bels, embeddingLength, sequenceLength);
+            const res = collectTensorParts(smPredictions, yParam, gradPart, bels, embeddingLength, sequenceLength);
 
             // just to be compatible with layers. if this is used in gradient calculation at the end of your model (during model.fit)
             // dy is allyways [1] (since it's the first element). if you want to speed it up, just enable CTC_LOSS_USE_DY_IN_GRAD_FUNC
@@ -383,6 +389,9 @@ function backwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][]
         const lastSeqStepId = sequenceLength-1;
         const c0 = yBatchMatrix[i][labelLength-1][lastSeqStepId] + yBatchMatrix[i][labelLength-2][lastSeqStepId];
 
+        // TODO: ezt le kell kezelni. Csak akkor lehet nulla, ha az elválasztó ÉS az utolsó karakter valségének összege nulla. Mivel mindkettő pozitív, ez csak akkor lehet, ha mindkettő nulla!
+        // TODO: ki kell találni, hogy ilyenkor hogy viselkedjen a rendszer! Lehet, hogy ilyenkor azt kell mondani, hogy nincs gradiens? próbálkozzunk valami mással, de addig is had menjen?
+
         initStep[labelLength - 1] = yBatchMatrix[i][labelLength-1][lastSeqStepId] / c0; // delimiter
         initStep[labelLength - 2] = yBatchMatrix[i][labelLength-2][lastSeqStepId] / c0; // last character
 
@@ -452,7 +461,7 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
  * 
  * TODO: outputShape contains embeddingLength and seqLength, they are unneccessary to pass to the function. Let's check.
  * 
- * @param outputShape should be equal to the input/label tensors' shape
+ * @param smPpredictions this was the original prediction's softmax values
  * @param yParam - y' tensor (padded)
  * @param grad - gradient tensor (padded)
  * @param bels - batch extended labels (padded)
@@ -460,8 +469,10 @@ function backwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor,
  * @param sequenceLength - number of steps to anticipate
  * @returns array of Tensors containing the gradients
  */
-function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bels: Tensor, embeddingLength: number, sequenceLength: number  ): Tensor[] {
+function collectTensorParts(smPpredictions: Tensor, yParam: Tensor, grad: Tensor, bels: Tensor, embeddingLength: number, sequenceLength: number  ): Tensor[] {
 
+    const outputShape = smPpredictions.shape;
+    
     const retY = <number[][][]>tf.fill(outputShape, 0).arraySync();
     const retG = <number[][][]>tf.fill(outputShape, 0).arraySync();
     // note: this is faster than: tf.buffer(labels.shape).toTensor().arraySync(), and more faster than building a zero-filled array by hand
@@ -486,15 +497,16 @@ function collectTensors(outputShape: number[], yParam: Tensor, grad: Tensor, bel
         });
     });
 
-    const rY = tf.tensor3d(retY);
     const rG = tf.tensor3d(retG);
 
-    // this was for testing purposes to see which tensor is used in backpropagation:
-    // return [tf.ones(rY.shape), tf.zeros(rG.shape)]; 
     // turns out, only the second (the one that is related to the logits)
-    // however, the negatives of the prediction is ginven as well, just to be correct regarding the "truth" part
-    // gradient is calculated according to (16) equation (remember, we've alread neg()-ed sumABper(zt_mul_y), so it's just an addition)
-    return [rY.neg(), rY.add(rG)];
+    // however, the prediction is ginven as well, just to be correct regarding the "truth" part
+    // TODO: let's find something meaningful for the fist part. It seam, it's not required by tensorflow's tape, so why should we bother with it? just pass back 'predictions' and we are done.
+    // gradient is calculated according to (16) equation (remember, we've alread neg()-ed sumABper(zt_mul_y), so now it's just an addition)
+    // quick notes: I'd argue, that the gradient would just be rY - rG, which only has values at the characters we were matching. However,
+    // the python implementation takes all the inputs, and subtracts the gradient trensor from that. Also, the lectures state, that the 
+    // gradient at s sounds, which were not examined should be jus zeros. Whatever, let's just be compatible.
+    return [smPpredictions.clone(), smPpredictions.add(rG)];
 }
 
 /**
