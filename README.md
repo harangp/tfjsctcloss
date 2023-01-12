@@ -1,11 +1,11 @@
 # Tensorflow.JS CTC loss implementation
 
 Tensorflow's JS as of now (2021.12.23) lacks a native implementation of the CTC loss.
-There's even a ticket requesting contribution: [1759](https://github.com/tensorflow/tfjs/issues/1759), but the last time it was touched was in October, 2019.
-Even if there are some resources available calculating the loss itself from an imput, they are not plugabble into the layered model infrastructure we all love.
+There's even a ticket requesting contribution: [1759](https://github.com/tensorflow/tfjs/issues/1759), but the last time it was touched was in October, 2019. Even if there are some resources available calculating the loss itself from an imput, they are not plugabble into the layered model infrastructure we all love.
+
 For practical purposes, I've decided to dive into the academic papers, and have a shot at it - in the meantime I'd like to deepen my knowledge of TypeScript and Tensorflow.
 
-The goal of this project is to finalize a CTC loss calculator to enable pure Tensorflow.JS implementation to work on either server side (with tfjs-node) and browser side (with tfjs-webgl).
+The goal of this project is to finalize a CTC loss calculator to enable pure Tensorflow.JS implementation to work on either server side (with tfjs-node) and browser side (with tfjs-webgl) too.
 
 ## What will you find here
 
@@ -20,9 +20,9 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ### Changelog
 
-- **0.6.0** - Fixed gradient propagation
-- **0.5.1** - Upgrading to tfjs 4.2.0 dependency, alternative to 'ts-node stops working'
-- **0.0.4** - Typo
+- **1.0.0** - Fixed gradient calculation and backpropagation, working tests
+- **0.5.1** - Upgrading to tfjs 4.2.0 dependency, alternatives implemented to 'ts-node stops working'
+- **0.0.4** - Typos
 - **0.0.3** - Forward calculation is tensory. Fallback to Array-based solution is possible
 - **0.0.2** - Handles variable length labels in large batches.
 - **0.0.1** - Fist version is made public. Basic calculation is validated, works well on single and batch inputs. Can be included in models, `model.fit()` runs nice. 
@@ -33,13 +33,12 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 ### Known issues
 
-- Thee's no input validation - input and label mismatches will result in runtime error
+- There's no input validation - input and label mismatches will result in runtime error
 - No `tidy()` anywhere - larger fit() runs migth get out of memory errors.
 - `wasm` backend fails to run gradient calculation. `tensorflow` and `cpu` works just fine
 
 ### TODO
 
-- Unit tests - current spec is not comparing expected results
 - Make it more tensory and depend less on JS native array operations
 
 ## Usage
@@ -80,19 +79,18 @@ You can use NPM as well, just do the usual installation procedure:
 npm install tfjsctcloss --save
 ```
 
-Then you can use the standard import in your TypeScript file:
+Then you can use the standard import in your TypeScript/JS file:
 
 ``` JS
 import { ctcLossGradient } from 'tfjsctcloss';
 ```
 
-*NOTE: if eslint throws an error because it couldn't find the package, just add:
+*NOTE: if `eslint` throws an error because it couldn't find the package, just add:
 
 ``` JS
 "moduleResolution": "node" /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */
 ```
-
-line in the `compilerOptions` part of your `tsconfig.json` file.
+line in the `compilerOptions` part of your `tsconfig.json` file. That did the trick for me.
 
 ### Inputs, labels and special restrictions
 
@@ -124,6 +122,17 @@ tf.env().set(CTC_LOSS_USE_DY_IN_GRAD_FUNC, true);
 ```
 The default is `false`.
 
+### Compatibiliity with the TensorFlow Python
+
+One of the main goal of this implementation is to be a somewhat drop-in replacement for the Python version of the `tf.nn.ctc_loss` package. At the current stage, there are some restrictions which are not obvious at first sight, so I collect them here:
+
+- The Python implementation awaits the 'truth' label information as a list of numbers representing the embeddings. TFJS does not allow that: labels have to have the same structure as the predictions. So, if you are moving the learning (fit) part from Python, you have to onehot-encode your labels to feed it to the model.
+- The input structure (as mentioned before) is `[batch][(time)step][one-hot encoded embeddings]`. In Python, this is identical to have `logits_time_major=False`
+- The blank index is always the last embedding. In Python, this is identical to have `blank_index=-1` in the parameters.
+- In this implementation, if you pad the labels with delimiters for shorter sentences - it's not a problem. I've found that the Python implementation behaves differently, since there you can explicitly specify the length of the label. So don't be surprised.
+
+The Python implementation uses the PHD thesis of Alan Graves, and moves the whole operation into log() space to have mathematical stability. This CTC calculation uses the normalization method, which was proposed in the original paper of Mr. Graves and his colleagues. Regardless the method, it yields the same result. I just personally don't like the overwhelming number of calculations exponentinal and logarithmic functions on big set of numbers.
+
 ## Development process
 What you'll get here is a constant progress and the evolution of the codebase. Here's my approach:
 
@@ -139,7 +148,7 @@ I've documented the process on my Medium page: https://harangpeter.medium.com/de
 
 ## CTC algorithm implementation specialities
 
-In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tensor concept. If you want to learn more about the algorithm, check the Medium page mentionaed above.
+In this chapter, I'll describe what I did for making the algorithm more compatible with the TFJS' tensor concept. If you want to learn more about the algorithm, check the Medium page mentioned above.
 
 ### Gradient calculation on batches
 
@@ -183,7 +192,7 @@ With this approach, we gain another optimalization: reusing the result of `a.mul
 ```js
 const abDivY = a.mul(b).divNoNan(y);
 const Zt = abDivY.sum(2, true); // setting it to true keeps the Zt tensor 3D instead of just 2D
-const innerSum = abDivY.divNoNan(Zt); // 3D tensor can be diviced by a 3D tensor
+const innerSum = abDivY.divNoNan(Zt); // 3D tensor can be divided by a 3D tensor
 ```
 Now we can move on to sum up the unique embeddings of `l'` into our gradient tensor - but that's a TODO for now.
 
@@ -327,15 +336,11 @@ On larger batches the native tfjs-node will be good - execution times are not as
 If you want to reproduce the results on your own system, just execute this command:
 
 ```
-ts-node .\src\perf.spec.ts
+npm run test:performance
 ```
-or
-```
-npm run perftest
-```
-*If the ts-node version does not work. (Please note, there might be problems, since there was a breaking change in TypeScript - issue nr. [49257](https://github.com/microsoft/TypeScript/issues/49257) and ts-node didn't catch up.)*
+*The ts-node version does not work currently, and I removed the dev-dependency. (Please note, there might be problems, since there was a breaking change in TypeScript - issue nr. [49257](https://github.com/microsoft/TypeScript/issues/49257) and ts-node didn't catch up.)*
 
-This will run the different batch sizes on the available backends.  Here are my execution times for reference:
+This test will run the different batch sizes on the available backends.  Here are my execution times for reference:
 
 | Batch size | tf-node w. TF impl. | JS w. TF impl. |	tf-node w. Array impl. | JS w. Array impl. |  tf-node w. TF impl. per batch item | JS w. TF impl. per batch item |	tf-node w. Array impl. per batch item | JS w. Array impl. per batch item |
 | ---- | -------: | -------: | -------: | -------: | -------: | -------: | -------: | -------: |

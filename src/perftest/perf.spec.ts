@@ -1,7 +1,7 @@
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-node';
 // import '@tensorflow/tfjs-backend-wasm';
-import { ctcLossGradient } from './ctc';
+import { ctcLossGradient } from '../ctc';
 
 console.log(new Date(), "entering production mode");
 tf.enableProdMode();

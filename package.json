@@ -5,7 +5,8 @@
   "keywords": [
     "tensorflow",
     "tfjs",
-    "ctc"
+    "ctc",
+    "ctc-loss"
   ],
   "author": "Harang Péter <harang.peter@bell.co.hu>",
   "license": "CC-BY-ND-4.0",
@@ -19,7 +20,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "perftest": "tsc && node ./build/perf.spec.js",
+    "test:performance": "tsc && node ./build/perftest/perf.spec.js",
     "test:node": "tsc && node ./build/ctc.spec.js",
     "test": "tsc && jasmine --config=jasmine.json"
   },
@@ -39,7 +40,6 @@
     "eslint-plugin-node": "^11.1.0",
     "eslint-plugin-promise": "^6.1.1",
     "jasmine": "^4.5.0",
-    "ts-node": "^10.9.1",
     "typescript": "^4.9.4"
   }
 }
