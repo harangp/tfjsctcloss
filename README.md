@@ -395,17 +395,22 @@ And read this, if you forgot what to do:
 Do a build, run the tests, and commit your work into the repository. **Do NOT increase the version number in the package.json!** (npm version will do that for you) After that do the following:
 
 ```
+npm run clean
 npm run build
-npm version patch|minor|major
+npm version patch|minor|major -m "Upgrade to %s for reasons"
 git push --tags
 npm pack
+npm publish --dry-run
 npm publish
 ```
 
-- `run build` will generate all the js files needed for the package
-- `version patch|minor|major` // this will create a git tag with increased patch/minor/major verion number 
+- `clean` will delete the build directory. If it doesn't work (on Windows, for example), just delete the build dir by hand
+- `build` will generate all the js files needed for the package
+- `version patch|minor|major` this will create a git tag with increased patch/minor/major verion number. Provide a message please
 - `pack` will generate a file that will contain all the realase. Example: tfjsctcloss-0.0.3.tgz
 - make sure the package has all the right files 
+- optionally, you can test the generated package locally - follow up here: https://medium.com/@vcarl/problems-with-npm-link-and-an-alternative-4dbdd3e66811
+- `publish --dry-run` will do a test. Examine what files will be included
 - `publish` will push the package into npm
 
 ## License
