@@ -82,8 +82,8 @@ function perfTest() {
 }
 
 function generateBatchData(size = 4): tf.Tensor[] {
-    const pred = [];
-    const labe = [];
+    const pred: Array<number[][]> = [];
+    const labe: Array<number[][]> = [];
     for (let i = 0; i < size; i++) {
         pred.push(groundNoise);
         labe.push(groundTruth);

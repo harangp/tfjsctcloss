@@ -1,26 +1,37 @@
 # Tensorflow.JS CTC loss implementation
 
-Tensorflow's JS as of now (2021.12.23) lacks a native implementation of the CTC loss.
-There's even a ticket requesting contribution: [1759](https://github.com/tensorflow/tfjs/issues/1759), but the last time it was touched was in October, 2019. Even if there are some resources available calculating the loss itself from an imput, they are not plugabble into the layered model infrastructure we all love.
+Tensorflow's JS as of now (2021.12.23) lacks a native implementation of the CTC loss. There's even a ticket requesting contribution: [1759](https://github.com/tensorflow/tfjs/issues/1759), but the last time it was touched was in October, 2019. Even if there are some resources available calculating the loss itself from an imput, they are not plugabble into the layered model infrastructure we all love.
 
 For practical purposes, I've decided to dive into the academic papers, and have a shot at it - in the meantime I'd like to deepen my knowledge of TypeScript and Tensorflow.
 
-The goal of this project is to finalize a CTC loss calculator to enable pure Tensorflow.JS implementation to work on either server side (with tfjs-node) and browser side (with tfjs-webgl) too.
+The goal of this project is to implement a CTC loss calculator to enable pure Tensorflow.JS implementation to work on either server side (with tfjs-node) and browser side (with tfjs-webgl) too.
+
+The implementation's base is defined in these papers:
+ - https://www.cs.toronto.edu/~graves/icml_2006.pdf
+ - https://axon.cs.byu.edu/~martinez/classes/778/Papers/CTC.pdf
+ - http://bacchiani.net/resume/papers/ASRU2017.pdf
+
+The implementation is based on the original paper, and the Tensorflow Python implementation. I took inspiration from:
+ - https://github.com/tensorflow/tfjs/issues/1759
+ - https://github.com/amaas/stanford-ctc/blob/master/ctc/ctc_fast.pyx
+ - https://github.com/yhwang/ds2-tfjs
+
+If you are interested in the deep working of the algorithm, I suggest this lecture: https://www.youtube.com/watch?v=c86gfVGcvh4
 
 ## What will you find here
 
 The whole repository is just three files:
 - **ctc.ts** contains the loss calculator, the gradient custom operation, and a helper function for decoding the results.
-- **ctc.spec.ts** contains the test, and also some examples how to include it in the models.
+- **ctc.spec.ts** contains the Jasmine test, and also some examples how to include it in the models.
 - **perf.spec.ts** contains some performance experiments.
 
-Otherwise, I will just document here my findings related to the implementation. I suggest checking out the PDF / Excel file which contains a careful calculation for a simple use-case, so you can follow what happens in each step, what is added up, what is multiplied, etc.
+The `doc` directory holds some examples, and images for a thorough documentation. For future reference, I will just document here my findings related to the implementation. I suggest checking out the PDF / Excel file which contains a careful calculation for a simple use-case, so you can follow what happens in each step, what is added up, what is multiplied, etc.
 
 ## Status
 
 ### Changelog
 
-- **1.0.0** - Fixed gradient calculation and backpropagation, working tests
+- **1.0.0** - Fixed gradient calculation and backpropagation, working tests, proper npm packaging
 - **0.5.1** - Upgrading to tfjs 4.2.0 dependency, alternatives implemented to 'ts-node stops working'
 - **0.0.4** - Typos
 - **0.0.3** - Forward calculation is tensory. Fallback to Array-based solution is possible
@@ -41,7 +52,7 @@ Otherwise, I will just document here my findings related to the implementation. 
 
 - Make it more tensory and depend less on JS native array operations
 
-## Usage
+## Install
 
 ### Include code
 
@@ -92,14 +103,18 @@ import { ctcLossGradient } from 'tfjsctcloss';
 ```
 line in the `compilerOptions` part of your `tsconfig.json` file. That did the trick for me.
 
+## Usage
+
+**Please read this carefully.** It will save you a lot of time figuring out how things work, and sets your expectations straight.
+
 ### Inputs, labels and special restrictions
 
 - This implementation operates on a 3D tensor: `[batch][(time)step][one-hot encoded embeddings]`.
-- The inputs of the loss calculation are probabilities, prepare a model that each timestep's emberddings values' are between 0 and 1 and sum up to 1.
-- For the learning process (fit) the labels should be one-hot encoded. Shape must be the same as for the inputs.
-- The **last one-hot embedding** is used as the delimiter - this is different than the current TF Python implementation
-- If the label is too short and does not fill the all the sequence, just padd it with the delimiter. All the delimiters are filtered when processing the labels, and are rebuilt from the ground.
-- If you want detect empty space between characters, or silence while processing sound, add an embedding for that too, don't use the delimiter for that.
+- The inputs of the loss calculation **shouldn't neccessary be probabilities**. The input is softmax-ed, and than the work begins.
+- For the learning process (fit) the **labels must be one-hot encoded**. Shape must be the same as for the inputs.
+- The **last one-hot embedding** is used as the delimiter - this is different than the current TF Python implementation, see notes later.
+- If the label is too short and does not fill the all the sequence, just pad it with the delimiter. **All the delimiters are filtered out** when processing the labels, and are rebuilt from the ground up.
+- If you want detect empty space between characters, or silence while processing sound, add an embedding for that too (preferrebly a space, or underscore), don't use the delimiter!
 
 ### Fallback to array-based calculation
 
@@ -114,7 +129,7 @@ You should run some of your own experiments testing which implementation suites 
 
 ### Using dy in gradient calculation
 
-Altough the proper way of dealing with gradient functions is to include the dy Tensor in the calculation. However, for th intended usage, dy is allwas [1], so multiplying doesn't do anything, just wastes resources. If you still need it, you can turn the feature on with setting `CTC_LOSS_USE_DY_IN_GRAD_FUNC` to `true` like this:
+The proper way of dealing with gradient functions is to include the dy Tensor in the calculation, so that the input can affect the output gradient tensor. However, for th intended usage of ctc loss, dy is allwas [1], so multiplying doesn't do anything, just wastes resources. If you still need it, you can turn the feature on with setting `CTC_LOSS_USE_DY_IN_GRAD_FUNC` to `true` like this:
 
 ```js
 import { CTC_LOSS_USE_DY_IN_GRAD_FUNC } from 'tfjsctcloss';
@@ -373,7 +388,9 @@ Currently, this project is for my own amusement. However, if you find it worthy 
 
 Follow this guide: https://cameronnokes.com/blog/the-30-second-guide-to-publishing-a-typescript-package-to-npm/
 
-And read this, if you forgot what to do: https://betterstack.dev/blog/npm-package-best-practices/
+And read this, if you forgot what to do:
+- https://betterstack.dev/blog/npm-package-best-practices/
+- https://snyk.io/blog/best-practices-create-modern-npm-package/
 
 Do a build, run the tests, and commit your work into the repository. **Do NOT increase the version number in the package.json!** (npm version will do that for you) After that do the following:
 

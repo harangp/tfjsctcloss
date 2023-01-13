@@ -74,7 +74,7 @@ export const ctcLoss = op({ctcLoss_});
  */
 function ctcLossGradient_<T extends Tensor, O extends Tensor>(truth: T, logits: T): O {
 
-    const customOp = customGrad((labels: Tensor, predictions: Tensor, save: GradSaveFunc) => {
+    const customOp = customGrad( (labels: Tensor<tf.Rank>, predictions: Tensor<tf.Rank>, save: GradSaveFunc) => {
 
         // TODO: input checks: labels tensor's shape should be equal to predictions tensor's shape. tensor's rank should be 3 (onehot)
         const [, sequenceLength, embeddingLength] = labels.shape;
@@ -155,7 +155,9 @@ function prepareTensors(batchLabels: Tensor, batchInputs: Tensor, delimiterIndex
         return ret;
     });
 
-    const batchPaddedExtendedLabels = padLabels(belsArray, batchInputs.shape[1] * 2 + 1, batchInputs.shape[2]);
+    const bis = batchInputs.shape[1] || 0; // TS 'possibly undefined'
+
+    const batchPaddedExtendedLabels = padLabels(belsArray, bis * 2 + 1, batchInputs.shape[2]);
     const paddedBatchY = tf.gather(paddedInput, batchPaddedExtendedLabels, 2, 1);
     const batchExtendedLabelLengths = tf.tensor(belsArray.map( x => x.length ));
 
@@ -203,12 +205,12 @@ function forwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][][
     // with every batch item we calculate alpha, and do the normalization in place as noted in the original paper
     batchExtendedLabels.forEach( (extendedLabel, i) => {
 
-        const ret = [];
+        const ret: Array<number[]> = [];
 
         let labelLength = extendedLabel.findIndex( x => x === labelPadder );
         if (labelLength < 0) labelLength = extendedLabel.length;
 
-        const initStep = new Array(extendedLabel.length).fill(0);
+        const initStep = <number[]> new Array(extendedLabel.length).fill(0);
         const c0 = yBatchMatrix[i][0][0] + yBatchMatrix[i][1][0]; // for rescale
 
         let loss = -Math.log(c0);
@@ -219,7 +221,7 @@ function forwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][][
 
         let prevStep = initStep;
         for(let t = 1; t < sequenceLength; t++) {
-            const fwdStep = [];
+            const fwdStep: Array<number> = [];
             const allowedIndex = labelLength - (sequenceLength - t) * 2;
             for(let l = 0; l < extendedLabel.length; l++) {
                 // this will cut out the ones that couldn't possibly reach the end (last elements)
@@ -296,8 +298,12 @@ function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, 
     // let's prepare the masks. this will be unique for each batch item. remarkably simpple. you can mul() boolean and float numbers, it works.
     const padddingMask = batchPaddedExtendedLabels.notEqual(tf.scalar(labelPadder)).expandDims(1);
 
+    // TS doesn't like working directly on arrays
+    const bpysDim1 = batchPaddedY.shape[1] || 0;
+    const bpysDim2 = batchPaddedY.shape[2] || 0;
+
     // the first iteration: y[0] and y[1] is inserted, the other ones are filled with zeros
-    const init = batchPaddedY.slice([0, 0], [batchPaddedY.shape[0], 1, 2]).pad([[0, 0], [0, 0], [0, batchPaddedY.shape[2]-2]]);
+    const init = batchPaddedY.slice([0, 0], [batchPaddedY.shape[0], 1, 2]).pad([[0, 0], [0, 0], [0, bpysDim2-2]]);
     const c0 = init.sum(2, true);
     
     let prevStep = init.divNoNan(c0);
@@ -305,8 +311,8 @@ function forwardTensor(batchPaddedExtendedLabels: Tensor, batchPaddedY: Tensor, 
 
     const stackable = [prevStep]; // results are collected here
 
-    for (let i = 1; i < batchPaddedY.shape[1]; i++) {
-        const y = batchPaddedY.slice([0, i, 0], [batchPaddedY.shape[0], 1, batchPaddedY.shape[2]]);
+    for (let i = 1; i < bpysDim1; i++) {
+        const y = batchPaddedY.slice([0, i, 0], [batchPaddedY.shape[0], 1, bpysDim2]);
 
         const fwdMask = prepareFwdMask(batchExtendedLabelLengths, batchPaddedY.shape, i);
 
@@ -383,9 +389,9 @@ function backwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][]
         let labelLength = extendedLabel.findIndex( x => x === labelPadder );
         if (labelLength < 0) labelLength = extendedLabel.length;
         
-        const ret = [];
+        const ret: Array<number[]> = [];
 
-        const initStep = new Array(extendedLabel.length).fill(0);
+        const initStep =  <number[]> new Array(extendedLabel.length).fill(0);
         const lastSeqStepId = sequenceLength-1;
         const c0 = yBatchMatrix[i][labelLength-1][lastSeqStepId] + yBatchMatrix[i][labelLength-2][lastSeqStepId];
 
@@ -403,7 +409,7 @@ function backwardArray(batchExtendedLabels: number[][], yBatchMatrix: number[][]
 
         let prevStep = initStep;
         for(let t = sequenceLength - 2; t >= 0; t--) {
-            const bkwdStep = [];
+            const bkwdStep: Array<number> = [];
 
             const allowedIndex = (t + 1) * 2 - 1; // Graves notes under eq (11)
             for(let l = 0; l < extendedLabel.length; l++) {
@@ -478,8 +484,8 @@ function collectTensorParts(smPpredictions: Tensor, yParam: Tensor, grad: Tensor
     // note: this is faster than: tf.buffer(labels.shape).toTensor().arraySync(), and more faster than building a zero-filled array by hand
 
     // let's just pick-and-sum the relevant character's values from 'grad' according to the 'sum' part of eq 16
-    const yArray = <number[][]>yParam.arraySync();
-    const gradArray = <number[][]>grad.arraySync();
+    const yArray = <number[][][]>yParam.arraySync();
+    const gradArray = <number[][][]>grad.arraySync();
     const belsArray = <number[][]>bels.arraySync();
 
     belsArray.forEach( (batchItem, b) => {
